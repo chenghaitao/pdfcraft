@@ -9,8 +9,9 @@
 //!
 //! The report gives the shipped share per tier and per area (partial counts half in the
 //! weighted figure). `--json` prints the numbers for STATUS.md; `--partial` lists partial
-//! features with their notes; `--viewer` adds the read-only reader scope from
-//! `parity/viewer-scope.toml` (and `--viewer --partial` lists what is still open there).
+//! features with their notes; `--viewer` adds the reader scope (the features local work
+//! takes first) from `parity/viewer-scope.toml` (and `--viewer --partial` lists what is
+//! still open there). Reporting only: it never gates or hides a command.
 //! Fails on any validation error.
 
 use std::collections::{BTreeMap, HashSet};
@@ -267,7 +268,7 @@ pub fn run(args: &[String]) -> Result<()> {
             println!("  {a} {name:<33} {:>8}  {:>7}  {:>7}  {:>8.1}%", s.0, s.1, s.2, s.4);
         }
         if let (_, Some(s)) = (&viewer, &viewer_total) {
-            println!("\n  reader scope: {} of {} counted features ({} outside the read-only boundary)", s.0, counted.len(), counted.len() - s.0);
+            println!("\n  reader scope: {} of {} counted features ({} outside it, worked on later)", s.0, counted.len(), counted.len() - s.0);
             println!("\n  scope          features  shipped  partial  shipped%  weighted%");
             println!("  reader         {:>8}  {:>7}  {:>7}  {:>7.1}%  {:>8.1}%", s.0, s.1, s.2, s.3, s.4);
             println!("  all features   {:>8}  {:>7}  {:>7}  {:>7.1}%  {:>8.1}%", total.0, total.1, total.2, total.3, total.4);
