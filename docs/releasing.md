@@ -121,7 +121,12 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
   (SHA-256, RFC 3161 timestamp), from a `.pfx` (`WINDOWS_CERTIFICATE`) or Azure Trusted Signing
   (`AZURE_*`), whichever is configured. It is the one place to change when signing changes.
 
-Locally: `dotnet tool install -g wix --version 5.0.2`, then `pwsh packaging/windows/package.ps1 -Arch x64`.
+Locally, `packaging/windows/build.ps1` is the one command (`pwsh packaging/windows/build.ps1`, or
+double-click `build.cmd`): it checks the toolchain, installs WiX v5 into the user profile when it
+is missing, and builds the MSI and the portable zip. `-PortableOnly` builds just the portable zip
+and needs no WiX, `-SkipBuild` repackages the binaries already in `target\`, `-PortableDir` also
+leaves the portable build unpacked, and `-Check` reports the toolchain and stops. It hands the
+packaging itself to `package.ps1`, the script CI runs.
 
 ### Linux
 
