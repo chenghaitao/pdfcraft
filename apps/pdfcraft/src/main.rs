@@ -3,6 +3,11 @@
 //! Usage: `pdfcraft [options] [files…]`
 //! `--create-images [images…]` stages the images in one PDF and asks for the page DPI.
 //!
+//! `--viewer-only` starts the app as a read-only viewer (also `PDFCRAFT_VIEWER_ONLY=1`): menus,
+//! the palette and keyboard shortcuts offer only commands that cannot change the document or
+//! write it back (`pdfcraft_engine::commands::viewer_visible`). Nothing is removed — every
+//! command stays registered, so the same build is the full editor without the flag.
+//!
 //! View options (applied after the files open; also the seed of the UI control channel):
 //! `--page N  --zoom 150  --layout continuous|two-up|single  --panel comments|bookmarks|pages|fields|layers|attachments|none
 //!  --theme light|dark|system  --language auto|<code>  --mode all|read|edit|convert|sign  --tool <catalogue id>  --left open|closed
@@ -94,6 +99,7 @@ fn main() -> eframe::Result {
     let mut options: Vec<(String, String)> = Vec::new();
     let mut control_file: Option<String> = None;
     let mut create_images = false;
+    let mut viewer_only = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -103,12 +109,19 @@ fn main() -> eframe::Result {
             }
             "--control" => control_file = args.next(),
             "--create-images" => create_images = true,
+            // Read-only viewer mode: menus, palette and shortcuts offer only commands that cannot
+            // change the document or write it back (PDFCRAFT_VIEWER_ONLY=1 does the same).
+            "--viewer-only" => viewer_only = true,
             flag if flag.starts_with("--") => {
                 let value = args.next().unwrap_or_default();
                 options.push((flag.trim_start_matches("--").to_string(), value));
             }
             _ => files.push(a),
         }
+    }
+    // The environment variable lets launchers, shortcuts and tests switch modes without a flag.
+    if std::env::var_os("PDFCRAFT_VIEWER_ONLY").is_some_and(|v| v != "0") {
+        viewer_only = true;
     }
     let integrated = cfg!(target_os = "macos");
     let mut viewport = egui::ViewportBuilder::default()
@@ -155,6 +168,7 @@ fn main() -> eframe::Result {
                 app.restore(&json);
             }
             app.integrated_titlebar = integrated;
+            app.viewer_only = viewer_only;
             app.update_source = Some(std::sync::Arc::new(updates::latest_release));
             app.keychain_ids = cfg!(target_os = "macos");
             #[cfg(target_os = "macos")]

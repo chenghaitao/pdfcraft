@@ -47,6 +47,33 @@ pub enum Needs {
     TwoPageView,
 }
 
+impl Needs {
+    /// Whether satisfying this need can change the document's bytes, its undo history or its
+    /// file on disk. Read-only viewer mode (`--viewer-only`) hides every command for which this
+    /// is true; see [`viewer_visible`].
+    ///
+    /// `Document` is not mutating on its own — opening a file, printing it or finding text all
+    /// need a document — so the handful of `Document` commands that do write are named in
+    /// [`VIEWER_HIDDEN`] instead.
+    pub const fn is_mutating(self) -> bool {
+        match self {
+            Self::Nothing | Self::Document | Self::TwoPageView => false,
+            Self::Assembly
+            | Self::Modification
+            | Self::Annotate
+            | Self::FillForms
+            | Self::HasComments
+            | Self::HasFields
+            | Self::HasRedactions
+            | Self::Marks(_)
+            | Self::Security
+            | Self::ProtectedSecurity
+            | Self::Undo
+            | Self::Redo => true,
+        }
+    }
+}
+
 /// A keyboard shortcut. `command` is ⌘ on macOS and Ctrl elsewhere.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Shortcut {
@@ -361,6 +388,61 @@ pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) 
     }
 }
 
+/// Commands hidden by read-only **viewer mode** even though their `needs` looks harmless: they
+/// write the file, create a new document, put a signature into one, or run a batch that changes
+/// documents. Everything else a viewer keeps follows from [`Needs::is_mutating`], so this list
+/// stays short: a command only lands here when it can change bytes without asking for a
+/// modification right.
+pub const VIEWER_HIDDEN: &[&str] = &[
+    // Creating a document from scratch or from other files.
+    "create.blank",
+    "create.file",
+    "create.images",
+    "create.clipboard",
+    "page.combine",
+    // Writing the file back.
+    "file.save",
+    "file.save_as",
+    "optimize.reduce",
+    "optimize.advanced",
+    "page.organize",
+    "redact.properties",
+    // Signing and certifying (verification stays: `sign.panel`, `sign.validate`).
+    "sign.digital",
+    "sign.certify",
+    "sign.certify_invisible",
+    "sign.fill.signature.change",
+    "sign.fill.signature.remove",
+    "sign.fill.initials.change",
+    "sign.fill.initials.remove",
+    // Batches and script hosts that change documents.
+    "actions.wizard",
+    "actions.distribution",
+    "actions.optimize_scans",
+    "form.merge_data",
+    "ocr.recognize_batch",
+    "tools.js_console",
+    // Format conversion (Word / HTML / RTF). Text and image export stay: they never touch the
+    // original file and are ordinary reader abilities.
+    "export.docx",
+    "export.html",
+    "export.rtf",
+    // Page assembly and measurement: they belong with annotation and editing, not with reading.
+    "page.copy",
+    "measure.info",
+    "measure.snap",
+    "measure.export",
+];
+
+/// Whether read-only viewer mode (`--viewer-only`) offers `spec`.
+///
+/// A viewer opens, reads, navigates, searches, prints and exports; it never changes the document
+/// or writes it back. The rule is [`Needs::is_mutating`] minus [`VIEWER_HIDDEN`], so it holds for
+/// commands added later without anyone remembering to update a list.
+pub fn viewer_visible(spec: &CommandSpec) -> bool {
+    !spec.needs.is_mutating() && !VIEWER_HIDDEN.contains(&spec.id)
+}
+
 /// The label to show for `spec` now ("Undo Rotate page" rather than "Undo").
 pub fn current_label(spec: &CommandSpec, session: &Session, active: Option<DocId>) -> String {
     let doc = active.and_then(|id| session.get(id));
@@ -421,5 +503,69 @@ mod tests {
         s.apply(id, crate::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
         assert!(is_enabled(undo, &s, Some(id)));
         assert_eq!(current_label(undo, &s, Some(id)), "Undo Rotate page");
+    }
+
+    #[test]
+    fn viewer_mode_keeps_reading_and_drops_editing() {
+        // Opening, navigating, searching, printing, exporting and verification stay.
+        for id in [
+            "file.open",
+            "file.close",
+            "file.properties",
+            "edit.find",
+            "edit.advanced_search",
+            "edit.snapshot",
+            "view.fit_one_page",
+            "view.read_mode",
+            "view.full_screen",
+            "view.theme.dark",
+            "print.dialog",
+            "export.text",
+            "export.image",
+            "export.all_images",
+            "comment.list",
+            "comment.hide_all",
+            "form.fields",
+            "a11y.check",
+            "sign.panel",
+            "sign.validate",
+            "standards.pdfa",
+            "doc.compare",
+            "help.about",
+        ] {
+            assert!(viewer_visible(command(id).unwrap()), "{id} should stay in viewer mode");
+        }
+        // Anything that changes the document, writes it, signs it or batches it goes.
+        for id in [
+            "file.save",
+            "file.save_as",
+            "edit.undo",
+            "edit.redo",
+            "page.rotate",
+            "page.delete",
+            "comment.note",
+            "redact.mark",
+            "protect.password",
+            "form.prepare",
+            "sign.digital",
+            "create.blank",
+            "page.combine",
+            "optimize.reduce",
+            "export.docx",
+            "ocr.recognize_batch",
+            "tools.js_console",
+        ] {
+            assert!(!viewer_visible(command(id).unwrap()), "{id} should be hidden in viewer mode");
+        }
+    }
+
+    #[test]
+    fn viewer_hidden_list_stays_honest() {
+        let mut seen = std::collections::HashSet::new();
+        for id in VIEWER_HIDDEN {
+            assert!(seen.insert(*id), "duplicate id {id} in VIEWER_HIDDEN");
+            let spec = command(id).unwrap_or_else(|| panic!("VIEWER_HIDDEN names unregistered command {id}"));
+            assert!(!spec.needs.is_mutating(), "{id} already mutating; drop it from VIEWER_HIDDEN");
+        }
     }
 }

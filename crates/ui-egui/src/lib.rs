@@ -372,6 +372,10 @@ pub struct PdfCraftApp {
     pub pick_override: Option<Vec<String>>,
     /// Write exported files (split) here instead of asking (tests and automation).
     pub export_dir_override: Option<String>,
+    /// Read-only viewer mode (`--viewer-only`): menus, the palette and shortcuts offer only the
+    /// commands that cannot change the document or write it back (`commands::viewer_visible`).
+    /// Every command stays registered and implementable — only its entry points are hidden.
+    pub viewer_only: bool,
     /// Split dialog settings.
     pub split_draft: SplitDraft,
     pub extract_draft: ExtractDraft,
@@ -578,6 +582,7 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             pick_override: None,
             export_dir_override: None,
+            viewer_only: false,
             split_draft: SplitDraft::default(),
             extract_draft: ExtractDraft::default(),
             rotate_draft: RotateDraft::default(),

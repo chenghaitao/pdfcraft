@@ -17,6 +17,9 @@ impl PdfCraftApp {
     /// Whether a registered command can run now. The engine judges the document (security,
     /// contents, undo history); view state it can't see is checked here.
     pub(crate) fn command_enabled(&self, spec: &CommandSpec) -> bool {
+        if self.viewer_only && !commands::viewer_visible(spec) {
+            return false;
+        }
         commands::is_enabled(spec, &self.session, self.active_ids().map(|(_, id)| id))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
     }
@@ -39,35 +42,39 @@ impl PdfCraftApp {
     fn execute_unguarded(&mut self, id: &str) -> bool {
         let Some(spec) = commands::command(id) else { return false };
         if !self.command_enabled(spec) {
-            let why = match spec.needs {
-                commands::Needs::Undo => tl!("Nothing to undo").to_string(),
-                commands::Needs::Redo => tl!("Nothing to redo").to_string(),
-                commands::Needs::FillForms if self.active.is_some() => tl!("This document has no form fields you can fill in").to_string(),
-                commands::Needs::HasComments if self.active.is_some() => tl!("This document has no comments to flatten").to_string(),
-                commands::Needs::HasFields if self.active.is_some() => tl!("This document has no form fields to flatten").to_string(),
-                commands::Needs::HasRedactions if self.active.is_some() => {
-                    tl!("There are no redaction marks (mark text, areas or pages first)").to_string()
-                }
-                commands::Needs::Marks(k) if self.active.is_some() => {
-                    let kind = match k {
-                        pdfcraft_engine::MarkKind::HeaderFooter => tl!("header or footer"),
-                        pdfcraft_engine::MarkKind::Watermark => tl!("watermark"),
-                        pdfcraft_engine::MarkKind::Background => tl!("background"),
-                    };
-                    crate::i18n::fmt(tl!("This document has no {kind} to change"), &[("kind", kind)])
-                }
-                commands::Needs::Security | commands::Needs::ProtectedSecurity if self.active.is_some() => {
-                    if self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.allows_security_change()) {
-                        tl!("This document isn't password-protected").to_string()
-                    } else {
-                        tl!("Only the document's owner can change its security (open it with the permissions password)").to_string()
+            let why = if self.viewer_only && !commands::viewer_visible(spec) {
+                tl!("This is a read-only viewer; that command would change the document").to_string()
+            } else {
+                match spec.needs {
+                    commands::Needs::Undo => tl!("Nothing to undo").to_string(),
+                    commands::Needs::Redo => tl!("Nothing to redo").to_string(),
+                    commands::Needs::FillForms if self.active.is_some() => tl!("This document has no form fields you can fill in").to_string(),
+                    commands::Needs::HasComments if self.active.is_some() => tl!("This document has no comments to flatten").to_string(),
+                    commands::Needs::HasFields if self.active.is_some() => tl!("This document has no form fields to flatten").to_string(),
+                    commands::Needs::HasRedactions if self.active.is_some() => {
+                        tl!("There are no redaction marks (mark text, areas or pages first)").to_string()
                     }
+                    commands::Needs::Marks(k) if self.active.is_some() => {
+                        let kind = match k {
+                            pdfcraft_engine::MarkKind::HeaderFooter => tl!("header or footer"),
+                            pdfcraft_engine::MarkKind::Watermark => tl!("watermark"),
+                            pdfcraft_engine::MarkKind::Background => tl!("background"),
+                        };
+                        crate::i18n::fmt(tl!("This document has no {kind} to change"), &[("kind", kind)])
+                    }
+                    commands::Needs::Security | commands::Needs::ProtectedSecurity if self.active.is_some() => {
+                        if self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.allows_security_change()) {
+                            tl!("This document isn't password-protected").to_string()
+                        } else {
+                            tl!("Only the document's owner can change its security (open it with the permissions password)").to_string()
+                        }
+                    }
+                    commands::Needs::Assembly | commands::Needs::Modification | commands::Needs::Annotate if self.active.is_some() => {
+                        tl!("The document's security settings don't allow this change").to_string()
+                    }
+                    commands::Needs::TwoPageView if self.active.is_some() => tl!("Switch to two-page view first to show the cover page").to_string(),
+                    _ => tl!("Open a document first").to_string(),
                 }
-                commands::Needs::Assembly | commands::Needs::Modification | commands::Needs::Annotate if self.active.is_some() => {
-                    tl!("The document's security settings don't allow this change").to_string()
-                }
-                commands::Needs::TwoPageView if self.active.is_some() => tl!("Switch to two-page view first to show the cover page").to_string(),
-                _ => tl!("Open a document first").to_string(),
             };
             self.notify(why);
             return false;
@@ -531,7 +538,8 @@ impl PdfCraftApp {
 /// Render a top-level menu's registered commands (with live labels, shortcuts and enablement).
 pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str) {
     let mac = cfg!(target_os = "macos") || cfg!(target_arch = "wasm32");
-    for spec in commands::menu(menu) {
+    let viewer_only = app.viewer_only;
+    for spec in commands::menu(menu).filter(|s| !viewer_only || commands::viewer_visible(s)) {
         let label = commands::current_label(spec, &app.session, app.active_ids().map(|(_, id)| id));
         let label = crate::i18n::menu_label(spec.id, &label);
         let shortcut = spec.shortcut.map(|s| s.label(mac)).unwrap_or_default();

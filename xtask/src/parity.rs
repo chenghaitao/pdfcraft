@@ -9,7 +9,9 @@
 //!
 //! The report gives the shipped share per tier and per area (partial counts half in the
 //! weighted figure). `--json` prints the numbers for STATUS.md; `--partial` lists partial
-//! features with their notes. Fails on any validation error.
+//! features with their notes; `--viewer` adds the read-only reader scope from
+//! `parity/viewer-scope.toml` (and `--viewer --partial` lists what is still open there).
+//! Fails on any validation error.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -157,6 +159,48 @@ pub fn validate(features: &[Feature], commands: &HashSet<String>, tools: &HashSe
     errors
 }
 
+/// The reader-scope whitelist in `parity/viewer-scope.toml` (`--viewer`). Group keys are area
+/// letters and exist only for reading; the tool unions them.
+#[derive(Debug, Deserialize)]
+struct ViewerFile {
+    schema: Schema,
+    #[serde(default)]
+    group: BTreeMap<String, ViewerGroup>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ViewerGroup {
+    #[serde(default)]
+    ids: Vec<String>,
+}
+
+/// Load the reader scope and check every id against the parity file; errors come back alongside
+/// the ids so a stale whitelist fails the run like any other parity error.
+fn viewer_scope(repo: &Path, features: &[Feature]) -> Result<(HashSet<String>, Vec<String>)> {
+    let path = repo.join("parity/viewer-scope.toml");
+    let text = std::fs::read_to_string(&path).with_context(|| format!("reading {} (needed by --viewer)", path.display()))?;
+    let file: ViewerFile = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    if file.schema.version != 1 {
+        bail!("unsupported viewer-scope schema version {}", file.schema.version);
+    }
+    let known: HashSet<&str> = features.iter().map(|f| f.id.as_str()).collect();
+    let mut ids = HashSet::new();
+    let mut errors = Vec::new();
+    for (area, group) in &file.group {
+        if !AREAS.iter().any(|(a, _)| a == area) {
+            errors.push(format!("viewer-scope: unknown group {area:?} (A–N)"));
+        }
+        for id in &group.ids {
+            if !known.contains(id.as_str()) {
+                errors.push(format!("viewer-scope: {id} is not in acrobat-features.toml"));
+            } else if !ids.insert(id.clone()) {
+                errors.push(format!("viewer-scope: duplicate id {id}"));
+            }
+        }
+    }
+    Ok((ids, errors))
+}
+
 pub fn run(args: &[String]) -> Result<()> {
     let repo = root();
     let path = repo.join("parity/acrobat-features.toml");
@@ -167,7 +211,14 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     let commands = quoted_after(&std::fs::read_to_string(repo.join("crates/engine/src/commands.rs"))?, &["c", "ct"]);
     let tools = quoted_after(&std::fs::read_to_string(repo.join("crates/automation/src/tools.rs"))?, &["t"]);
-    let errors = validate(&file.features, &commands, &tools, &repo);
+    let mut errors = validate(&file.features, &commands, &tools, &repo);
+    let viewer = if args.iter().any(|a| a == "--viewer") {
+        let (ids, mut found) = viewer_scope(&repo, &file.features)?;
+        errors.append(&mut found);
+        Some(ids)
+    } else {
+        None
+    };
 
     // Progress: per tier and per area. N/A tier and `na` status are excluded from percentages.
     let counted: Vec<&Feature> = file.features.iter().filter(|f| f.status != "na" && f.tier != "N/A").collect();
@@ -188,6 +239,11 @@ pub fn run(args: &[String]) -> Result<()> {
         by_area.push((*a, *name, score(&fs)));
     }
     let total = score(&counted);
+    let viewer_counted: Vec<&Feature> = match &viewer {
+        Some(ids) => counted.iter().copied().filter(|f| ids.contains(&f.id)).collect(),
+        None => Vec::new(),
+    };
+    let viewer_total = viewer.as_ref().map(|_| score(&viewer_counted));
     let without_headless: Vec<&str> = file.features.iter().filter(|f| f.status == "shipped" && f.tools.is_empty()).map(|f| f.id.as_str()).collect();
 
     if args.iter().any(|a| a == "--json") {
@@ -195,6 +251,7 @@ pub fn run(args: &[String]) -> Result<()> {
             "features": file.features.len(),
             "total": { "counted": total.0, "shipped": total.1, "partial": total.2, "shipped_pct": total.3, "weighted_pct": total.4 },
             "tiers": by_tier.iter().map(|(t, s)| (t.to_string(), serde_json::json!({ "counted": s.0, "shipped": s.1, "partial": s.2, "shipped_pct": s.3 }))).collect::<serde_json::Map<_, _>>(),
+            "viewer": viewer_total.map(|s| serde_json::json!({ "counted": s.0, "shipped": s.1, "partial": s.2, "shipped_pct": s.3, "weighted_pct": s.4 })),
             "errors": errors,
         });
         println!("{}", serde_json::to_string_pretty(&json)?);
@@ -208,6 +265,27 @@ pub fn run(args: &[String]) -> Result<()> {
         println!("\n  area                                features  shipped  partial  weighted%");
         for (a, name, s) in &by_area {
             println!("  {a} {name:<33} {:>8}  {:>7}  {:>7}  {:>8.1}%", s.0, s.1, s.2, s.4);
+        }
+        if let (_, Some(s)) = (&viewer, &viewer_total) {
+            println!("\n  reader scope: {} of {} counted features ({} outside the read-only boundary)", s.0, counted.len(), counted.len() - s.0);
+            println!("\n  scope          features  shipped  partial  shipped%  weighted%");
+            println!("  reader         {:>8}  {:>7}  {:>7}  {:>7.1}%  {:>8.1}%", s.0, s.1, s.2, s.3, s.4);
+            println!("  all features   {:>8}  {:>7}  {:>7}  {:>7.1}%  {:>8.1}%", total.0, total.1, total.2, total.3, total.4);
+            println!("\n  reader scope by area               features  shipped  partial  weighted%");
+            for (a, name) in AREAS {
+                let fs: Vec<&Feature> = viewer_counted.iter().copied().filter(|f| f.area == *a).collect();
+                if fs.is_empty() {
+                    continue;
+                }
+                let s = score(&fs);
+                println!("  {a} {name:<33} {:>8}  {:>7}  {:>7}  {:>8.1}%", s.0, s.1, s.2, s.4);
+            }
+            if args.iter().any(|a| a == "--partial") {
+                println!("\n  reader scope still open (partial, then planned):");
+                for f in viewer_counted.iter().copied().filter(|f| f.status != "shipped") {
+                    println!("  {:<9} {:<42} {}", f.status, f.id, f.notes);
+                }
+            }
         }
         if args.iter().any(|a| a == "--partial") {
             println!("\npartial features and what is missing:");
@@ -257,6 +335,19 @@ mod tests {
             "c(\"file.open\", \"Open…\", FILE, None), ct(\"edit.undo\", \"Undo\"), t(\"doc_open\", \"Open\"), t(\n    \"doc_save\",), format(x)";
         assert_eq!(quoted_after(src, &["c", "ct"]), HashSet::from(["file.open".to_string(), "edit.undo".to_string()]));
         assert_eq!(quoted_after(src, &["t"]), HashSet::from(["doc_open".to_string(), "doc_save".to_string()]));
+    }
+
+    #[test]
+    fn the_reader_scope_file_only_names_known_ids() {
+        let repo = root();
+        let text = std::fs::read_to_string(repo.join("parity/acrobat-features.toml")).unwrap();
+        let features: File = toml::from_str(&text).unwrap();
+        let (ids, errors) = viewer_scope(&repo, &features.features).unwrap();
+        assert!(errors.is_empty(), "reader scope errors: {errors:?}");
+        assert!(ids.len() > 100, "reader scope looks too small: {} ids", ids.len());
+        for id in &ids {
+            assert!(features.features.iter().any(|f| f.id == *id), "{id} is not a tracked feature");
+        }
     }
 
     #[test]

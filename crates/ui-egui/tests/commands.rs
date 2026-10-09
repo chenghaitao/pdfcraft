@@ -228,3 +228,42 @@ fn the_about_dialog_shows_the_running_version() {
     h.run_steps(3);
     h.get_by_label_contains(&format!("Version {}", env!("CARGO_PKG_VERSION")));
 }
+
+/// Read-only viewer mode (`--viewer-only`): the same build with editing entry points hidden.
+#[test]
+fn viewer_mode_keeps_reading_and_refuses_editing() {
+    let mut app = PdfCraftApp::new();
+    app.viewer_only = true;
+    app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
+    // Opening, navigating, searching, printing and inspecting still work.
+    assert!(app.execute("view.fit_one_page"));
+    assert!(app.execute("edit.find"));
+    assert!(app.execute("file.properties"));
+    // Anything that would change the document or write it back is refused, with a reason.
+    for id in ["file.save", "file.save_as", "edit.undo", "edit.redo", "page.rotate", "comment.note", "redact.mark", "create.blank", "export.docx"] {
+        assert!(!app.execute(id), "{id} must not run in viewer mode");
+        assert_eq!(
+            app.toast.as_ref().map(|t| t.0.as_str()),
+            Some("This is a read-only viewer; that command would change the document"),
+            "{id} should say why it is unavailable"
+        );
+    }
+}
+
+#[test]
+fn viewer_mode_keeps_editing_out_of_the_palette() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.viewer_only = true;
+        app.open_bytes("doc.pdf", None, fixture(3)).unwrap();
+        app
+    });
+    h.run_steps(3);
+    h.state_mut().set_option("palette", "rotate pages clockwise").unwrap();
+    h.run_steps(3);
+    assert!(h.query_by_label("Rotate pages clockwise").is_none(), "editing commands are not offered in viewer mode");
+    // A reading command still is.
+    h.state_mut().set_option("palette", "fit one full page").unwrap();
+    h.run_steps(3);
+    h.get_by_label("Fit one full page");
+}
