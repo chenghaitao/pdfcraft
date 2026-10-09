@@ -2,7 +2,7 @@
 //! and Edit ▸ Take a Snapshot (drag a rectangle to copy that area as an image).
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
-use pdfcraft_render::{RenderConfig, RenderRequest, RequestKind, Tile};
+use pdfcraft_render::{MAX_SCALE, MAX_TILE_SIDE, RenderConfig, RenderRequest, RequestKind, Tile};
 
 use crate::canvas::{DocView, PageXform};
 use crate::{PdfCraftApp, QuickTool};
@@ -110,20 +110,28 @@ impl PdfCraftApp {
         Ok(())
     }
 
-    /// Render `view_rect` (page view points) of `page` at the current zoom and copy it to the
-    /// clipboard (and keep it in `last_snapshot`).
+    /// Render `view_rect` (page view points) of `page` and copy it to the clipboard (and keep it in
+    /// `last_snapshot`).
+    ///
+    /// The copy is made at the resolution the view shows on screen (`DocView::render_scale`), so a
+    /// snapshot taken at a deep zoom is as sharp as the screen instead of being pulled back to a
+    /// fixed scale, and a deep-zoom copy is not resampled when it is pasted. Only the size one
+    /// raster allows lowers that, and then only as far as it must.
     pub fn snapshot(&mut self, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32), String> {
         let view = &self.views[index];
         let doc = self.session.get(view.id).ok_or("no document")?;
         let ppp = self.ctx.as_ref().map_or(2.0, |c| c.pixels_per_point());
-        let scale = (view.zoom * ppp).clamp(0.5, 8.0);
+        let (vw, vh) = ((view_rect[2] - view_rect[0]).max(0.0), (view_rect[3] - view_rect[1]).max(0.0));
+        let scale = snapshot_scale(view.render_scale(ppp), vw, vh);
         let tile = Tile {
             x: (view_rect[0] * scale).floor().max(0.0) as u32,
             y: (view_rect[1] * scale).floor().max(0.0) as u32,
-            w: ((view_rect[2] - view_rect[0]) * scale).ceil().max(1.0) as u32,
-            h: ((view_rect[3] - view_rect[1]) * scale).ceil().max(1.0) as u32,
+            w: (vw * scale).ceil().max(1.0) as u32,
+            h: (vh * scale).ceil().max(1.0) as u32,
         };
-        if (tile.w as u64) * (tile.h as u64) > 64_000_000 {
+        // `snapshot_scale` keeps the region inside one tile, so this cannot fire for a selection
+        // made on screen; it guards the public entry point against a rectangle no raster could hold.
+        if tile.w > MAX_TILE_SIDE || tile.h > MAX_TILE_SIDE {
             return Err("the area is too large at this zoom".into());
         }
         let config = RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..RenderConfig::default() };
@@ -141,6 +149,19 @@ impl PdfCraftApp {
         self.last_snapshot = Some((w, h, out.rgba));
         Ok((w, h))
     }
+}
+
+/// The device pixels per point a snapshot of a `w` × `h` point area may use: `wanted` (what the
+/// view shows on screen), pulled back only as far as one raster requires — a side within
+/// [`MAX_TILE_SIDE`] — and kept inside the renderer's own `0.01`…`MAX_SCALE` range. A selection
+/// therefore always copies the sharpest image that fits rather than one at a fixed scale.
+fn snapshot_scale(wanted: f32, w: f32, h: f32) -> f32 {
+    let mut scale = if wanted.is_finite() { wanted } else { 1.0 };
+    let longest = w.max(h);
+    if longest.is_finite() && longest > 0.0 {
+        scale = scale.min(MAX_TILE_SIDE as f32 / longest);
+    }
+    scale.clamp(0.01, MAX_SCALE)
 }
 
 /// The normalised bounds [u0, v0, u1, v1] of the pixels that aren't (near) white, if any.
@@ -174,5 +195,30 @@ mod tests {
         }
         assert_eq!(super::ink_bounds(w, h, &px), Some([0.2, 0.25, 0.8, 0.8]));
         assert_eq!(super::ink_bounds(w, h, &vec![255u8; w * h * 4]), None);
+    }
+
+    /// A snapshot copies at the scale the view shows: 16 px/pt came back as 8 (400 % at 2× display
+    /// scaling halved the copy), and the copy was resampled on paste.
+    #[test]
+    fn a_snapshot_keeps_the_on_screen_scale() {
+        assert_eq!(super::snapshot_scale(16.0, 50.0, 20.0), 16.0);
+        assert_eq!(super::snapshot_scale(170.0, 5.0, 4.0), 170.0);
+    }
+
+    /// The only thing that lowers the scale is one raster's size, and then just enough to fit.
+    #[test]
+    fn a_snapshot_lowers_the_scale_only_to_fit_one_tile() {
+        let s = super::snapshot_scale(16.0, 4000.0, 10.0);
+        assert!((s * 4000.0 - super::MAX_TILE_SIDE as f32).abs() < 0.5, "{s}");
+        // A selection that fits one tile is copied at the screen scale however deep the zoom.
+        assert_eq!(super::snapshot_scale(170.0, 20.0, 16.0), 170.0);
+    }
+
+    #[test]
+    fn a_snapshot_scale_stays_inside_the_renderers_range() {
+        assert_eq!(super::snapshot_scale(10_000.0, 4.0, 4.0), pdfcraft_render::MAX_SCALE);
+        assert_eq!(super::snapshot_scale(0.0, 4.0, 4.0), 0.01);
+        assert_eq!(super::snapshot_scale(f32::NAN, 4.0, 4.0), 1.0);
+        assert_eq!(super::snapshot_scale(8.0, f32::NAN, 4.0), 8.0);
     }
 }

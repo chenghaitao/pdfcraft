@@ -41,7 +41,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pdfcraft_engine::export::ImageFormat;
-use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind, inspect};
+use pdfcraft_render::{MAX_TILED_PIXELS, PageRenderer, RenderConfig, RenderRequest, RequestKind, inspect};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -366,7 +366,9 @@ fn render(args: &[String]) -> Result<(), CliError> {
         _ => return Err(format!("render: --out {out}: use a .png, .jpg, .tif or .pam name").into()),
     };
     let mut r = PageRenderer::new(read(path)?, RenderConfig { password: flag(args, "--password").map(Arc::from), ..Default::default() });
-    let p = r.render(RenderRequest { page: page_index, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0 });
+    // Tiled when one raster cannot hold the requested dpi, so `--dpi 1200` is honoured rather
+    // than quietly pulled back to 8192 px a side.
+    let p = r.render_best(RenderRequest { page: page_index, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0 }, MAX_TILED_PIXELS);
     if let Some(e) = p.error {
         return Err(e.into());
     }

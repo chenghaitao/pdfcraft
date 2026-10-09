@@ -291,6 +291,25 @@ fn marquee_zoom_and_snapshot() {
     assert!(after > before * 2.0, "{before} → {after}");
 }
 
+/// A snapshot copies at the scale the view shows, so one taken at a deep zoom is as sharp as the
+/// screen: the copy used to be pulled back to 8 px/pt (half of 1600 %) and was then resampled when
+/// it was pasted.
+#[test]
+fn a_deep_zoom_snapshot_keeps_the_on_screen_scale() {
+    let mut h = harness();
+    let i = h.state().active.unwrap();
+    h.state_mut().system_clipboard = false;
+    h.state_mut().views[i].set_zoom(16.0);
+    h.run_steps(3);
+    assert!(h.state_mut().execute("edit.snapshot"));
+    // 320 × 160 points dragged on screen: at the old 8 px/pt its copy was 120 × 60.
+    let c = h.state().views[i].viewport_rect().center();
+    drag(&mut h, c - egui::vec2(160.0, 80.0), c + egui::vec2(160.0, 80.0));
+    let (w, hgt, _) = h.state().last_snapshot.clone().expect("a snapshot");
+    assert!(w >= 300 && hgt >= 150, "{w} × {hgt}");
+    assert!((w as f32 / hgt as f32 - 2.0).abs() < 0.05, "{w} × {hgt}");
+}
+
 #[test]
 fn fit_visible_zooms_to_the_content_width() {
     let mut h = harness();

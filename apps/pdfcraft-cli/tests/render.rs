@@ -77,3 +77,40 @@ fn an_unknown_extension_fails_and_writes_nothing() {
     assert!(stderr.contains(".png, .jpg, .tif or .pam"), "{stderr}");
     assert!(!out.exists());
 }
+
+/// A 1000×20 pt page with a blue bar. At 720 dpi it is 10,000 px wide — past the 8192 px a single
+/// raster may be — with few enough pixels to keep the test cheap.
+fn wide_fixture(test: &str) -> PathBuf {
+    let path = tmp(test, "wide.pdf");
+    let content = "0 0 1 rg 900 2 80 16 re f";
+    let pdf = format!(
+        "%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 1000 20] /Contents 4 0 R >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len()
+    );
+    std::fs::write(&path, pdf).unwrap();
+    path
+}
+
+/// A dpi that one raster cannot hold is honoured by tiling instead of being quietly pulled back
+/// to 8192 px a side (`view.deep-zoom-tiles` at the CLI).
+#[test]
+fn a_high_dpi_is_not_pulled_back_to_the_single_raster_cap() {
+    let pdf = wide_fixture("hidpi");
+    let out = tmp("hidpi", "p1.png");
+    let r =
+        Command::new(BIN).args(["render", pdf.to_str().unwrap(), "--page", "1", "--dpi", "720", "--out", out.to_str().unwrap()]).output().unwrap();
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    let bytes = std::fs::read(&out).unwrap();
+    assert_eq!(&bytes[12..16], b"IHDR");
+    assert_eq!((be32(&bytes[16..20]), be32(&bytes[20..24])), (10_000, 200), "the full 720 dpi, not a capped 8192");
+    let stderr = String::from_utf8_lossy(&r.stderr);
+    assert!(stderr.contains("10000×200"), "{stderr}");
+}

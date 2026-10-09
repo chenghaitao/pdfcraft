@@ -803,11 +803,11 @@ title = "Tiled rendering keeps deep zoom sharp"
 area = "B"
 tier = "P0"
 milestone = "M3"
-status = "partial"
+status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster.rs::tiles_match_full_render", "crates/render/src/raster.rs::effective_scale_never_exceeds_the_caps"]
-notes = "capped at 8192 px per side (M3.3)"
+evidence = ["crates/render/src/raster.rs::tiles_match_full_render", "crates/render/src/raster.rs::tiled_render_lifts_the_per_side_cap", "crates/render/src/raster.rs::tile_grid_covers_the_page_exactly", "crates/render/src/raster.rs::tiled_render_refuses_a_raster_over_its_budget"]
+notes = "One raster still caps at MAX_SIDE (8192 px a side); `PageRenderer::render_tiled` draws past it in TILE_SIDE tiles and assembles them, bounded by MAX_TILED_PIXELS, and `render_best` picks tiled-else-capped. The viewer tiles above 4096 px a side (canvas.rs); Export ▸ Image, CLI `render` and the automation render tool use render_best, so a high dpi is honoured instead of being pulled back to 8192 px."
 
 [[feature]]
 id = "view.layout-continuous"
@@ -1514,8 +1514,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["edit.snapshot"]
 tools = ["page_render"]
-evidence = ["crates/ui-egui/tests/viewer.rs::marquee_zoom_and_snapshot"]
-notes = "copies the area at the current zoom to the clipboard as an image"
+evidence = ["crates/ui-egui/tests/viewer.rs::marquee_zoom_and_snapshot", "crates/ui-egui/tests/viewer.rs::a_deep_zoom_snapshot_keeps_the_on_screen_scale", "crates/ui-egui/src/zoom_snap.rs::a_snapshot_keeps_the_on_screen_scale"]
+notes = "copies the area at the current zoom to the clipboard as an image, at the view's own device scale (`DocView::render_scale`), so a snapshot at a deep zoom is as sharp as the screen rather than being resampled when pasted; only a selection too big for one raster (MAX_TILE_SIDE a side) lowers that scale, and then only as far as it must"
 
 [[feature]]
 id = "view.rulers"

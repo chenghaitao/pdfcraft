@@ -54,23 +54,29 @@ impl Exporter {
         if page < self.pages { Ok(()) } else { Err(format!("page {} does not exist", page + 1)) }
     }
 
+    /// The page raster at `dpi`, tiled when one raster could not hold it (a letter page past
+    /// ~965 dpi is wider than [`pdfcraft_render::MAX_SIDE`]), so a high resolution is honoured
+    /// instead of being pulled back to 8192 px.
+    fn raster(&mut self, page: usize, dpi: f64) -> Result<pdfcraft_render::RenderedPage, String> {
+        let req = RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() };
+        let r = self.renderer.render_best(req, pdfcraft_render::MAX_TILED_PIXELS);
+        match r.error {
+            Some(e) => Err(format!("page {}: {e}", page + 1)),
+            None => Ok(r),
+        }
+    }
+
     /// Page `page` (0-based) as a PNG at `dpi` (capped by the renderer's size limits).
     pub fn png(&mut self, page: usize, dpi: f64) -> Result<Vec<u8>, String> {
         self.check(page)?;
-        let r = self.renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() });
-        if let Some(e) = r.error {
-            return Err(format!("page {}: {e}", page + 1));
-        }
+        let r = self.raster(page, dpi)?;
         encode_png(r.width, r.height, &r.rgba)
     }
 
     /// Page `page` as an image file of `format`.
     pub fn image(&mut self, page: usize, dpi: f64, format: ImageFormat) -> Result<Vec<u8>, String> {
         self.check(page)?;
-        let r = self.renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() });
-        if let Some(e) = r.error {
-            return Err(format!("page {}: {e}", page + 1));
-        }
+        let r = self.raster(page, dpi)?;
         encode_image(r.width, r.height, &r.rgba, format)
     }
 

@@ -17,7 +17,8 @@ pub use inspect::{
     attachment_data, inspect, pretty_date,
 };
 pub use raster::{
-    MAX_PIXELS, MAX_SIDE, PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderedPage, RequestKind, Tile, device_pixels, effective_scale,
+    MAX_PIXELS, MAX_SCALE, MAX_SIDE, MAX_TILE_SIDE, MAX_TILED_PIXELS, MAX_TILES, PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderedPage,
+    RequestKind, TILE_SIDE, Tile, device_pixels, effective_scale, tile_grid,
 };
 pub use text::{PageText, TextGlyph};
 

@@ -103,10 +103,34 @@ fn japanese_face(name: &str, serif: bool, bold: bool) -> JapaneseFace {
     }
 }
 
-/// Hard cap on a rendered side, to bound memory at extreme zoom levels (tiling arrives in M3.3).
+/// Hard cap on a side of a **single** raster, to bound memory at extreme zoom levels.
+///
+/// This bounds one `render` call, not the resolution available to callers: a page that needs more
+/// than this a side goes through [`PageRenderer::render_tiled`], which draws it in tiles of at
+/// most [`TILE_SIDE`] and assembles them, so deep zoom stays sharp past this cap.
 pub const MAX_SIDE: f32 = 8192.0;
-/// Hard cap on rendered pixels per page (~64 MP ≈ 256 MB RGBA).
+/// Hard cap on rendered pixels in one raster (~64 MP ≈ 256 MB RGBA).
 pub const MAX_PIXELS: f32 = 64.0e6;
+/// Longest side of one tile in [`PageRenderer::render_tiled`]. Kept well under [`MAX_SIDE`] so a
+/// tile's pixmap stays small however large the page is at the requested scale.
+pub const TILE_SIDE: u32 = 2048;
+/// Longest side a **caller-supplied** region ([`RenderRequest::tile`]) may have. A request over
+/// this is cut back to it, so one caller cannot ask for an unbounded pixmap; callers that need
+/// more ask for a region of at most this a side, or go through [`PageRenderer::render_tiled`].
+pub const MAX_TILE_SIDE: u32 = 4096;
+/// The most pixels [`PageRenderer::render_tiled`] will assemble by default (160 MP ≈ 640 MB
+/// RGBA): enough for the largest page the renderers accept at their highest dpi (a letter or A4
+/// page at 1200 dpi is 135 / 99 MP). Past this the caller decides what to do rather than the
+/// renderer quietly lowering the scale.
+pub const MAX_TILED_PIXELS: u64 = 160 << 20;
+/// Largest device pixels per point any render honours (a fuzzed scale must not ask for absurd
+/// pixmaps). Tiles stay inside it too, so tiling does not raise this.
+pub const MAX_SCALE: f32 = 400.0;
+/// The most tiles one tiled page render may ask for, so a tiny tile size cannot spin forever.
+pub const MAX_TILES: u64 = 65_536;
+/// Absolute ceiling on a tiled raster whatever budget a caller passes (512 MP ≈ 2 GB RGBA). An
+/// allocation nobody could use has to fail, not abort the process.
+const TILED_PIXELS_CEILING: u64 = 512 << 20;
 
 /// What a request asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -173,6 +197,32 @@ pub fn device_pixels(pt: f32, scale: f32) -> u32 {
     if px.is_finite() { px.ceil().max(1.0) as u32 } else { 1 }
 }
 
+/// The tiles that cover a `width` × `height` device-pixel grid, in row-major order, each at most
+/// `max_tile` a side (the last column and row are clipped to the grid). `None` when the grid is
+/// empty or would need more than [`MAX_TILES`] tiles.
+///
+/// The tiles tile the grid exactly: no gap, no overlap, and every pixel in exactly one tile.
+pub fn tile_grid(width: u32, height: u32, max_tile: u32) -> Option<Vec<Tile>> {
+    let step = max_tile.max(1);
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let cols = u64::from(width).div_ceil(u64::from(step));
+    let rows = u64::from(height).div_ceil(u64::from(step));
+    if cols.saturating_mul(rows) > MAX_TILES {
+        return None;
+    }
+    let mut tiles = Vec::with_capacity((cols * rows) as usize);
+    for ty in 0..rows {
+        for tx in 0..cols {
+            let x = (tx as u32).saturating_mul(step);
+            let y = (ty as u32).saturating_mul(step);
+            tiles.push(Tile { x, y, w: step.min(width - x), h: step.min(height - y) });
+        }
+    }
+    Some(tiles)
+}
+
 /// Render one page with a caller-owned parser and cache. Panics inside the renderer are caught
 /// and reported as `Err((message, panicked))`.
 type Output = (u32, u32, Vec<u8>, Option<Arc<crate::text::PageText>>);
@@ -195,8 +245,8 @@ fn render_page<'a>(pdf: &'a Pdf, cache: &RenderCache<'a>, settings: &Interpreter
         let rs = match req.tile {
             // Tiles are bounded by construction, so the page itself may be arbitrarily large.
             Some(t) => {
-                let scale = req.scale.clamp(0.01, 400.0);
-                let (tw, th) = (t.w.clamp(1, 4096), t.h.clamp(1, 4096));
+                let scale = req.scale.clamp(0.01, MAX_SCALE);
+                let (tw, th) = (t.w.clamp(1, MAX_TILE_SIDE), t.h.clamp(1, MAX_TILE_SIDE));
                 RenderSettings {
                     x_scale: scale,
                     y_scale: scale,
@@ -221,6 +271,69 @@ fn render_page<'a>(pdf: &'a Pdf, cache: &RenderCache<'a>, settings: &Interpreter
     match result {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => Err((e, false)),
+        Err(panic) => Err((format!("renderer crashed on page {}: {}", req.page + 1, panic_message(&panic)), true)),
+    }
+}
+
+/// Render a whole page by drawing it in tiles and assembling them, so a side may exceed
+/// [`MAX_SIDE`]. `max_pixels` bounds the assembled raster; over it the request fails with the
+/// size it would need, so a caller can decide instead of being handed a silently smaller image.
+fn render_page_tiled<'a>(
+    pdf: &'a Pdf,
+    cache: &RenderCache<'a>,
+    settings: &InterpreterSettings,
+    req: RenderRequest,
+    max_pixels: u64,
+) -> Result<Output, (String, bool)> {
+    if req.kind == RequestKind::Text {
+        return render_page(pdf, cache, settings, req);
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let pages = pdf.pages();
+        let page = match pages.get(req.page) {
+            Some(p) => p,
+            None => return Err((format!("page {} does not exist", req.page + 1), false)),
+        };
+        let (w, h) = page.render_dimensions();
+        if !(w.is_finite() && h.is_finite()) || w < 0.5 || h < 0.5 {
+            return Err((format!("page {} has an empty or invalid page box ({w}×{h} pt)", req.page + 1), false));
+        }
+        let scale = req.scale.clamp(0.01, MAX_SCALE);
+        let (dw, dh) = (device_pixels(w, scale), device_pixels(h, scale));
+        let pixels = u64::from(dw).saturating_mul(u64::from(dh));
+        let budget = max_pixels.min(TILED_PIXELS_CEILING);
+        if pixels > budget {
+            return Err((format!("page {} at {scale} px/pt is {dw}×{dh} px, over the {budget} px budget", req.page + 1), false));
+        }
+        // A tile's side is at most MAX_SIDE, so it always fits the u16 the renderer takes.
+        let tiles = match tile_grid(dw, dh, TILE_SIDE.min(MAX_SIDE as u32)) {
+            Some(t) => t,
+            None => return Err((format!("page {} at {scale} px/pt needs too many tiles", req.page + 1), false)),
+        };
+        let mut rgba = vec![0u8; (pixels * 4) as usize];
+        let stride = dw as usize * 4;
+        for t in tiles {
+            let (tw, th) = (t.w as usize, t.h as usize);
+            let sub = render_page(pdf, cache, settings, RenderRequest { tile: Some(t), scale, ..req })?;
+            // The tile renderer returns exactly the tile size; refuse anything else rather than
+            // blitting a short buffer into the page.
+            if sub.0 as usize != tw || sub.1 as usize != th || sub.2.len() < tw * th * 4 {
+                return Err((format!("tile at {},{} came back {}×{}", t.x, t.y, sub.0, sub.1), false));
+            }
+            let dst_x = t.x as usize;
+            for y in 0..th {
+                let dst = (t.y as usize + y) * stride + dst_x * 4;
+                let src = y * tw * 4;
+                if dst + tw * 4 <= rgba.len() {
+                    rgba[dst..dst + tw * 4].copy_from_slice(&sub.2[src..src + tw * 4]);
+                }
+            }
+        }
+        Ok((dw, dh, rgba, None))
+    }));
+    match result {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(e)) => Err(e),
         Err(panic) => Err((format!("renderer crashed on page {}: {}", req.page + 1, panic_message(&panic)), true)),
     }
 }
@@ -258,6 +371,34 @@ impl PageRenderer {
         let Some(pdf) = self.pdf.as_ref() else { return finish(req, start, Err(("the document could not be parsed".into(), false))) };
         let cache = RenderCache::new();
         let r = render_page(pdf, &cache, &self.settings, req);
+        if matches!(r, Err((_, true))) {
+            self.pdf = parse(&self.bytes, self.config.password.as_deref());
+        }
+        finish(req, start, r)
+    }
+
+    /// Render one page at the highest resolution the request asks for and `max_pixels` allows:
+    /// [`Self::render_tiled`] when the page fits that budget, otherwise the capped single raster
+    /// [`Self::render`] gives, so a caller asking for more than one raster may hold still gets the
+    /// best image available instead of a failure. Never panics.
+    pub fn render_best(&mut self, req: RenderRequest, max_pixels: u64) -> RenderedPage {
+        let tiled = self.render_tiled(req, max_pixels);
+        if tiled.error.is_some() { self.render(req) } else { tiled }
+    }
+
+    /// Render one page as a **single** raster even when a side would exceed [`MAX_SIDE`], by
+    /// drawing it in tiles of at most [`TILE_SIDE`] and assembling them. `max_pixels` bounds the
+    /// result: over it the request fails (with the size it would need) rather than quietly
+    /// rendering at a lower scale. `RequestKind::Text` ignores tiling and behaves as [`Self::render`].
+    ///
+    /// Never panics.
+    pub fn render_tiled(&mut self, req: RenderRequest, max_pixels: u64) -> RenderedPage {
+        let start = Stopwatch::start();
+        let r = match self.pdf.as_ref() {
+            None => Err(("the document could not be parsed".into(), false)),
+            // One cache for every tile, so shared resources (fonts, images) are decoded once.
+            Some(pdf) => render_page_tiled(pdf, &RenderCache::new(), &self.settings, req, max_pixels),
+        };
         if matches!(r, Err((_, true))) {
             self.pdf = parse(&self.bytes, self.config.password.as_deref());
         }
@@ -1506,6 +1647,90 @@ trailer << /Root 1 0 R >>
                 assert_eq!(a, b, "pixel {x},{y}");
             }
         }
+    }
+
+    /// A page whose device raster exceeds `MAX_SIDE` a side: `render` caps it, `render_tiled`
+    /// assembles it at the size the scale asks for, and the tiles land exactly where a direct tile
+    /// render puts them, so deep zoom past the cap stays pixel-accurate.
+    #[test]
+    fn tiled_render_lifts_the_per_side_cap() {
+        // 1000×20 pt at 10 px/pt is 10,000×200 px: over MAX_SIDE (8192) a side, with the ink past
+        // the cap, so a capped raster shows none of it.
+        let mut r = PageRenderer::new(Arc::new(wide_page().into_bytes()), RenderConfig::default());
+        let req = RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 10.0, tag: 0 };
+
+        let capped = r.render(req);
+        assert!(capped.error.is_none(), "{:?}", capped.error);
+        assert_eq!(capped.width, MAX_SIDE as u32, "one raster is still capped");
+
+        let whole = r.render_tiled(req, MAX_TILED_PIXELS);
+        assert!(whole.error.is_none(), "{:?}", whole.error);
+        assert_eq!((whole.width, whole.height), (10_000, 200), "tiling keeps the full resolution");
+        let px = |x: u32, y: u32| &whole.rgba[((y * whole.width + x) * 4) as usize..][..4];
+        assert_eq!(px(9_400, 100), &[0, 0, 255, 255], "the far side of the page is drawn");
+        assert_eq!(px(500, 100), &[255, 255, 255, 255], "the rest stays blank");
+
+        // The assembled page matches a tile rendered on its own, past the old cap.
+        let part = r.render(RenderRequest { tile: Some(Tile { x: 9_000, y: 40, w: 900, h: 120 }), ..req });
+        assert_eq!((part.width, part.height), (900, 120));
+        for y in 0..120u32 {
+            for x in 0..900u32 {
+                let a = px(9_000 + x, 40 + y);
+                let b = &part.rgba[((y * 900 + x) * 4) as usize..][..4];
+                assert_eq!(a, b, "pixel {x},{y}");
+            }
+        }
+
+        // A page that fits goes through tiling unchanged, so callers can use one path.
+        let mut s = PageRenderer::new(Arc::new(ONE_PAGE.to_vec()), RenderConfig::default());
+        let small = RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0 };
+        let plain = s.render(small);
+        let tiled = s.render_tiled(small, MAX_TILED_PIXELS);
+        assert_eq!((plain.width, plain.height), (tiled.width, tiled.height));
+        assert_eq!(plain.rgba, tiled.rgba);
+    }
+
+    /// The tiles tile the device grid exactly: no gap, no overlap, every pixel in one tile.
+    #[test]
+    fn tile_grid_covers_the_page_exactly() {
+        let tiles = super::tile_grid(5, 3, 2).expect("tiles");
+        assert_eq!(tiles.len(), 6, "3 columns by 2 rows");
+        assert_eq!((tiles[0].x, tiles[0].y, tiles[0].w, tiles[0].h), (0, 0, 2, 2));
+        assert_eq!((tiles[2].x, tiles[2].w), (4, 1), "the last column is clipped");
+        assert_eq!((tiles[3].y, tiles[3].h), (2, 1), "the last row is clipped");
+        let area: u64 = tiles.iter().map(|t| u64::from(t.w) * u64::from(t.h)).sum();
+        assert_eq!(area, 5 * 3, "no gaps and no overlaps");
+        // A single tile when the grid fits, and nothing for an empty or absurd one.
+        assert_eq!(super::tile_grid(4, 4, 8).map(|t| t.len()), Some(1));
+        assert!(super::tile_grid(0, 4, 8).is_none());
+        assert!(super::tile_grid(u32::MAX, u32::MAX, 1).is_none(), "a one-pixel tile size cannot ask for 2^64 tiles");
+    }
+
+    /// Past its budget the tiled path reports the size instead of handing back a smaller image.
+    #[test]
+    fn tiled_render_refuses_a_raster_over_its_budget() {
+        let mut r = PageRenderer::new(Arc::new(ONE_PAGE.to_vec()), RenderConfig::default());
+        // 100×50 pt at 200 px/pt is 20,000×10,000 = 200 MP, over a 64 MP budget.
+        let out = r.render_tiled(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 200.0, tag: 0 }, 64 << 20);
+        assert!(out.error.as_deref().is_some_and(|e| e.contains("200,000,000") || e.contains("budget")), "{:?}", out.error);
+        assert_eq!((out.width, out.height), (0, 0));
+    }
+
+    /// 1000×20 pt with a blue rectangle whose device pixels land past `MAX_SIDE` at 10 px/pt.
+    fn wide_page() -> String {
+        let content = "0 0 1 rg 900 2 80 16 re f";
+        format!(
+            "%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 1000 20] /Contents 4 0 R >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len()
+        )
     }
 
     /// A Japanese CID font that isn't embedded (Adobe-Japan1, as `HeiseiMin-W3` with

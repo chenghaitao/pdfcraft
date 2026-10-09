@@ -1,8 +1,11 @@
 //! The document area: page layout, zoom, render scheduling, overlays (links, annotation hovers,
 //! form-field highlights), and the organize-pages grid.
 //!
-//! Page images come from the engine's render pool as whole-page rasters at the current zoom;
-//! stale rasters are shown stretched until the sharp one arrives (tiling comes in M3.3).
+//! Page images come from the engine's render pool. A page that would raster to more than
+//! `TILE_THRESHOLD` device pixels a side is drawn from a low-resolution whole-page backdrop plus
+//! sharp `TILE`-sized tiles of the part on screen, so deep zoom stays sharp without a single
+//! raster growing with the zoom level; anything smaller is one whole-page raster at the exact
+//! device scale. Stale rasters are shown stretched until the new ones arrive.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ops::Range;
@@ -956,7 +959,9 @@ impl DocView {
         rects
     }
 
-    fn render_scale(&self, ppp: f32) -> f32 {
+    /// The device pixels per point this view renders at, so a raster maps texel for texel onto the
+    /// screen (used for the page rasters and for a snapshot).
+    pub(crate) fn render_scale(&self, ppp: f32) -> f32 {
         // Exactly the device scale: a raster at any other scale is resampled on screen, which
         // blurs every line and glyph (#260).
         self.zoom * PT * ppp

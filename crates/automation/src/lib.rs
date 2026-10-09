@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use pdfcraft_engine::{DocId, Document, Edit, Session, commands};
 use pdfcraft_platform::staging::{StagingName, create_staging, staging_suffixes};
-use pdfcraft_render::{PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind};
+use pdfcraft_render::{MAX_TILED_PIXELS, PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind};
 use serde_json::{Value, json};
 
 pub use tools::{ToolDef, tools};
@@ -1360,7 +1360,11 @@ impl Automation {
         if !(1.0..=MAX_DPI).contains(&dpi) {
             return Err(ToolError::InvalidArgs(format!("dpi must be between 1 and {MAX_DPI}")));
         }
-        let out = self.renderer(id)?.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: (dpi / 72.0) as f32, tag: 0 });
+        // Tiled when one raster cannot hold the requested dpi (a large page past ~965 dpi at
+        // letter size), so the tool honours it instead of quietly rendering at 8192 px a side.
+        let out = self
+            .renderer(id)?
+            .render_best(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: (dpi / 72.0) as f32, tag: 0 }, MAX_TILED_PIXELS);
         if let Some(e) = out.error {
             return Err(failed(format!("page {} could not be rendered: {e}", page + 1)));
         }
