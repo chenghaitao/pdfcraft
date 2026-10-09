@@ -266,7 +266,25 @@ fn first_supported(list: &str) -> Option<Lang> {
 
 #[cfg(target_arch = "wasm32")]
 fn detect_system_lang() -> Lang {
-    Lang::EN
+    // A browser page has no `LANG`: its preferred languages are the system language.
+    browser_languages().as_deref().and_then(first_supported).unwrap_or(Lang::EN)
+}
+
+/// The browser's preferred languages (`navigator.languages`), most preferred first, one tag per
+/// line — the shape [`first_supported`] reads. `None` when the page reports none, which shows
+/// English.
+#[cfg(target_arch = "wasm32")]
+fn browser_languages() -> Option<String> {
+    let navigator = web_sys::window()?.navigator();
+    let languages = navigator.languages();
+    let mut tags: Vec<String> = (0..languages.length()).filter_map(|i| languages.get(i).as_string()).filter(|t| !t.is_empty()).collect();
+    // Older browsers report only `navigator.language`.
+    if tags.is_empty()
+        && let Some(tag) = navigator.language().filter(|t| !t.is_empty())
+    {
+        tags.push(tag);
+    }
+    (!tags.is_empty()).then(|| tags.join("\n"))
 }
 
 thread_local! {
@@ -445,6 +463,19 @@ mod tests {
         assert_eq!(first_supported("en-US\r\n"), Some(Lang::EN));
         assert_eq!(first_supported("fr-FR\r\n"), Lang::from_code("fr"));
         assert_eq!(first_supported("\r\n"), None);
+    }
+
+    /// The web interface has no `LANG`: `navigator.languages` is its system language, most
+    /// preferred first, so the first tag with a catalog wins.
+    #[test]
+    fn a_browser_language_list_resolves_in_order() {
+        assert_eq!(first_supported("zh-CN\nen-US"), Lang::from_code("zh-hans"));
+        assert_eq!(first_supported("zh-TW\nzh-CN"), Lang::from_code("zh-hant"));
+        assert_eq!(first_supported("de-DE\nja-JP"), Some(JA()));
+        assert_eq!(first_supported("de-DE\nen-GB"), Some(Lang::EN));
+        assert_eq!(first_supported("de-DE\nes-ES"), Lang::from_code("es"));
+        assert_eq!(first_supported("de-DE\nsv-SE"), None, "no catalog: the UI shows English");
+        assert_eq!(first_supported(""), None);
     }
 
     #[cfg(target_os = "windows")]

@@ -24,6 +24,11 @@
 </p>
 
 <p align="center">
+  <img alt="English" src="https://img.shields.io/badge/English-current-12a58a">
+  <a href="README.zh-CN.md"><img alt="简体中文" src="https://img.shields.io/badge/%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-README-0a7563"></a>
+</p>
+
+<p align="center">
   <a href="https://discord.gg/artcraft"><img alt="Join the ArtCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
 </p>
 
@@ -357,14 +362,19 @@ cargo xtask screenshots                           # regenerate every screenshot 
 ```
 
 The interface language is chosen in **Menu → Edit → Preferences…** (Command-comma on macOS,
-Ctrl-comma elsewhere, also with no document open; Auto follows the system language;
-see [docs/localization.md](docs/localization.md)) and saved. Japanese covers commands,
-dialogs, panels and keyboard shortcuts. Command search accepts the translated label, the
-English label and the stable command id; filenames, PDF contents, author names, custom
-action names and error details from the engine or the operating system keep their own text.
+Ctrl-comma elsewhere, also with no document open) and saved. **Auto**, the default, follows the
+system language: the locale environment variables, the macOS preferred-languages list, the
+Windows display languages, or the browser's preferred languages on the web. Simplified Chinese,
+Traditional Chinese, Japanese, Russian, Spanish, French and Telugu cover commands, dialogs,
+panels and keyboard shortcuts; Czech and Brazilian Portuguese cover the menus so far; the rest
+shows English. Command search accepts the translated label, the English label and the stable
+command id; filenames, PDF contents, author names, custom action names and error details from
+the engine or the operating system keep their own text. See
+[docs/localization.md](docs/localization.md), and this README's
+[Simplified Chinese version](README.zh-CN.md).
 
-Japanese fonts come from [craft-fonts](https://github.com/storytold/craft-fonts), an optional build
-input that every release includes. To build with them (Japanese interface text, and Japanese text in
+CJK fonts come from [craft-fonts](https://github.com/storytold/craft-fonts), an optional build
+input that every release includes. To build with them (CJK interface text, and Japanese text in
 edited PDFs):
 
 ```sh
