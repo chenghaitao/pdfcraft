@@ -9,3 +9,6 @@ plan/
 /assets/models
 # A craft-fonts checkout used as the optional CRAFT_FONTS_DIR build input (CI and releases put it here).
 /craft-fonts
+# Local agent/workspace data, never part of a build. (A bare `.*/*/*` here would also swallow
+# new files under .github/workflows/, so keep this directory-scoped.)
+/.workbuddy/
