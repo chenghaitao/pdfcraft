@@ -382,7 +382,10 @@ CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p pdfcraft -- some.pdf
 
 在不带该输入的情况下构建时，桌面端会用本机已安装的字体来绘制内嵌字体不包含的界面文字
 （Windows 用微软雅黑、macOS 用苹方、Linux 用 Noto Sans CJK），因此中文或日文标签仍然可读，
-不会再显示成方块；设置 `PDFCRAFT_SYSTEM_FONTS=0` 可关闭这一回退。
+不会再显示成方块；设置 `PDFCRAFT_SYSTEM_FONTS=0` 可关闭这一回退。该输入已覆盖的脚本组不会再由系统字体
+绘制；Windows 上 `packaging\windows\build.ps1` 会自动接管放在仓库根目录旁的 `craft-fonts\`
+（见 `docs/releasing.md`）。若该 checkout 带 `Hans` 字面——上游 `main` 已加入 `Noto Sans CJK SC`，
+而正式版固定的那个提交没有——简体中文也会用这个设计字体绘制。
 
 每个 [GitHub 发布版](https://github.com/storytold/pdfcraft/releases) 都提供 macOS、Windows、
 Linux（AppImage、Flatpak、`.deb`、`.rpm` 和 tarball）、FreeBSD 和网页版的现成构建，见

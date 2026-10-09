@@ -385,7 +385,10 @@ CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p pdfcraft -- some.pdf
 Built without that input, the desktop app draws interface text no bundled face has with one
 already installed on the machine (Microsoft YaHei on Windows, PingFang on macOS, Noto Sans CJK on
 Linux), so a Chinese or Japanese label stays readable instead of showing a box; `PDFCRAFT_SYSTEM_FONTS=0`
-turns that fallback off.
+turns that fallback off. A group the input does cover is not drawn by an installed face at all, and on
+Windows `packaging\windows\build.ps1` picks up a `craft-fonts\` checkout beside the repository root
+on its own (`docs/releasing.md`). A checkout that carries a `Hans` face — upstream `main` added
+`Noto Sans CJK SC`; the release-pinned one has none — draws Simplified Chinese in the crafted face too.
 
 Each [GitHub release](https://github.com/storytold/pdfcraft/releases) has ready-made builds for macOS,
 Windows, Linux (AppImage, Flatpak, `.deb`, `.rpm` and a tarball), FreeBSD and the web; see

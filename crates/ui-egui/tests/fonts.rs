@@ -170,6 +170,36 @@ fn system_fallback_fills_missing_scripts() {
     }
 }
 
+/// A script group the build input already covers never gets an installed face appended: the
+/// crafted face is what draws it, the installed one could only be reached for a character the
+/// crafted face lacks, and the CJK files are 17–22 MB of memory. This is what "the interface
+/// uses the crafted fonts, the installed ones only fill the gaps" means in code.
+#[test]
+fn a_covered_script_group_gets_no_installed_face() {
+    let defs = theme::installed_font_definitions(true);
+    let loaded = installed_faces(&defs);
+    if !pdfcraft_fonts::ui_chinese_fonts().is_empty() {
+        assert!(!loaded.contains(&theme::SYSTEM_FALLBACK_CJK), "craft-fonts draws Chinese; the installed CJK face must not be loaded: {loaded:?}");
+    }
+    if !pdfcraft_fonts::ui_arabic_fonts().is_empty() {
+        assert!(
+            !loaded.contains(&theme::SYSTEM_FALLBACK_ARABIC),
+            "craft-fonts draws Arabic; the installed Arabic face must not be loaded: {loaded:?}"
+        );
+    }
+    if !pdfcraft_fonts::ui_telugu_fonts().is_empty() {
+        assert!(
+            !loaded.contains(&theme::SYSTEM_FALLBACK_TELUGU),
+            "craft-fonts draws Telugu; the installed Telugu face must not be loaded: {loaded:?}"
+        );
+    }
+    // Whatever does get loaded ends every family, so the crafted faces still win the lookup:
+    // they sit earlier in the stack.
+    for name in &loaded {
+        assert!(defs.families.values().all(|stack| stack.contains(&(*name).to_owned())), "{name} is in no family");
+    }
+}
+
 /// Without craft-fonts the interface fonts still install and lay out any text (Japanese falls
 /// back to egui's replacement glyph) without panicking; Latin text is unaffected.
 #[test]
