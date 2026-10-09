@@ -59,6 +59,10 @@ impl PdfCraftApp {
 
     /// Run a push button's JavaScript (its Mouse Up action).
     pub fn run_button_script(&mut self, id: DocId, field: &str, script: &str) {
+        // A script reads the fields: include what's still being typed in one (#166).
+        if !self.commit_form_typing() {
+            return;
+        }
         match self.session.run_javascript(id, script, Some(field)) {
             Ok(o) => {
                 if let Some(i) = self.views.iter().position(|v| v.id == id)
@@ -253,7 +257,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     ui.horizontal(|ui| {
         ui.label(tl!("Default workspace mode"));
         for (mode, label) in [
-            (crate::Mode::AllTools, "All Tools"),
+            (crate::Mode::AllTools, "All tools"),
             (crate::Mode::Read, "Read"),
             (crate::Mode::Edit, "Edit"),
             (crate::Mode::Convert, "Convert"),

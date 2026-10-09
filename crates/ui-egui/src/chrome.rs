@@ -24,19 +24,30 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             }
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                if icons::button(ui, "house", 28.0, app.active.is_none(), tl!("Home")).clicked() {
+                if icons::button(ui, "house", 28.0, app.active.is_none() && !app.combine_showing(), tl!("Home")).clicked() {
                     app.active = None;
+                    app.combine_tab.focused = false;
                 }
                 let mut close = None;
                 for i in 0..app.views.len() {
                     let Some(doc) = app.session.get(app.views[i].id) else { continue };
                     let (name, dirty) = (doc.display_name(), doc.dirty);
-                    if tab(ui, &t, &name, dirty, app.active == Some(i), &mut close, i).clicked() {
+                    if tab(ui, &t, "file-text", &name, dirty, app.active == Some(i), &mut close, i).clicked() {
                         app.active = Some(i);
                     }
                 }
                 if let Some(i) = close {
                     app.request_close_tab(i);
+                }
+                if app.combine_tab.open {
+                    // After the document tabs; its index can't clash with theirs.
+                    let mut close = None;
+                    if tab(ui, &t, "files", tl!("Combine files"), false, app.combine_showing(), &mut close, usize::MAX).clicked() {
+                        app.open_combine_tab();
+                    }
+                    if close.is_some() {
+                        app.close_combine_tab();
+                    }
                 }
                 ui.add_space(4.0);
                 if widgets::ghost_button(ui, "plus", tl!("Open")).on_hover_text(tl!("Open a PDF (⌘O)")).clicked() {
@@ -77,9 +88,12 @@ fn theme_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
 }
 
-fn tab(ui: &mut egui::Ui, t: &Tokens, name: &str, dirty: bool, active: bool, close: &mut Option<usize>, index: usize) -> egui::Response {
+#[allow(clippy::too_many_arguments)]
+fn tab(ui: &mut egui::Ui, t: &Tokens, icon: &str, name: &str, dirty: bool, active: bool, close: &mut Option<usize>, index: usize) -> egui::Response {
     let font = theme::regular(13.0);
     let label: String = if name.chars().count() > 28 { format!("{}…", name.chars().take(27).collect::<String>()) } else { name.to_string() };
+    // Painted text only: the accessibility name below keeps the logical order.
+    let label = crate::bidi::visual(&label).into_owned();
     let text_w = ui.fonts_mut(|f| f.layout_no_wrap(label.clone(), font.clone(), t.text).size().x);
     let (rect, resp) = ui.allocate_exact_size(vec2(text_w + 64.0, 30.0), Sense::click());
     let a11y = if dirty { format!("{name} (edited)") } else { name.to_string() };
@@ -92,13 +106,7 @@ fn tab(ui: &mut egui::Ui, t: &Tokens, name: &str, dirty: bool, active: bool, clo
         Color32::TRANSPARENT
     };
     ui.painter().rect_filled(rect, CornerRadius { nw: 7, ne: 7, sw: 0, se: 0 }, bg);
-    icons::paint(
-        ui,
-        Rect::from_min_size(rect.min + vec2(6.0, 7.0), vec2(16.0, 16.0)),
-        "file-text",
-        15.0,
-        if active { t.accent } else { t.text_muted },
-    );
+    icons::paint(ui, Rect::from_min_size(rect.min + vec2(6.0, 7.0), vec2(16.0, 16.0)), icon, 15.0, if active { t.accent } else { t.text_muted });
     ui.painter().text(rect.min + vec2(28.0, rect.height() / 2.0), Align2::LEFT_CENTER, label, font, if active { t.text } else { t.text_muted });
     let x_rect = Rect::from_center_size(rect.right_center() - vec2(16.0, 0.0), vec2(20.0, 20.0));
     let x = ui.interact(x_rect, ui.id().with(("tabclose", index)), Sense::click());
@@ -114,7 +122,8 @@ fn tab(ui: &mut egui::Ui, t: &Tokens, name: &str, dirty: bool, active: bool, clo
     if x.clicked() {
         *close = Some(index);
     }
-    resp.on_hover_text(if dirty { crate::i18n::fmt(tl!("{name} — unsaved changes"), &[("name", name)]) } else { name.to_string() })
+    let shown = crate::bidi::visual(name);
+    resp.on_hover_text(if dirty { crate::i18n::fmt(tl!("{name} — unsaved changes"), &[("name", shown.as_ref())]) } else { shown.into_owned() })
 }
 
 pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
@@ -139,12 +148,11 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     let has_doc = app.active.is_some();
-                    let viewer_only = app.viewer_only;
                     ui.add_enabled_ui(has_doc, |ui| {
                         if icons::button(ui, "printer", 32.0, false, tl!("Print (⌘P)")).clicked() {
                             app.run_command("print.dialog");
                         }
-                        if !viewer_only && icons::button(ui, "save", 32.0, false, tl!("Save (M4)")).clicked() {
+                        if icons::button(ui, "save", 32.0, false, tl!("Save (M4)")).clicked() {
                             app.run_command("file.save");
                         }
                         if icons::button(ui, "info", 32.0, false, tl!("Document properties (⌘D)")).clicked() {

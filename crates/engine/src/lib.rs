@@ -20,7 +20,11 @@ pub mod export;
 pub mod js;
 pub mod links;
 pub mod ocr;
+pub mod optimizer;
+pub mod signature_image;
 pub mod xfa;
+
+pub use signature_image::{ImageSignaturePreview, SignatureImage};
 
 pub use pdfcraft_organize::{BoxSpec, PageBox, SplitBy, split_ranges};
 
@@ -29,7 +33,7 @@ pub use pdfcraft_organize::LabelStyle;
 pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnification, Navigation};
 
 pub use pdfcraft_cos::Algorithm;
-pub use pdfcraft_create::ImageResolution;
+pub use pdfcraft_create::{CONVERTIBLE, ImageResolution, SourceKind, source_kind};
 pub use pdfcraft_edit::{
     Added, AddedImage, AddedText, Align as TextAlign, Background, Content as AddedContent, Family as FontFamily, HeaderFooter, MarkKind, Watermark,
 };
@@ -107,7 +111,7 @@ pub type SplitPart = (usize, usize, Arc<Vec<u8>>);
 use std::sync::Arc;
 
 use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
-use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
+use pdfcraft_render::{DocInfo, Layer, LayerOp, OpenError, RenderConfig, RenderPool, inspect};
 
 /// Stable identifier of an open document within a session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -190,8 +194,11 @@ pub struct Document {
     pub id: DocId,
     pub name: String,
     pub path: Option<String>,
-    /// The working file: what Save writes and what is displayed.
+    /// The working file: what Save writes.
     pub bytes: Arc<Vec<u8>>,
+    /// What is displayed (the page view, `page_render`, page images): `bytes`, plus appearances
+    /// drawn for display only for comments that have none ([`display_bytes`]). Never saved.
+    pub display: Arc<Vec<u8>>,
     pub info: DocInfo,
     pub renderer: RenderPool,
     /// The password the document was opened with (needed to read attachments, etc.).
@@ -470,8 +477,49 @@ impl Document {
     }
 }
 
+/// What is displayed: the working file, plus (in memory only, never saved) the appearances
+/// PdfCraft draws for comments that have none ([`pdfcraft_annot::with_missing_appearances`]).
+/// The working file is unchanged, and so is everything that reads it (saving, signatures, …).
+fn display_bytes(editor: Option<&Editor>, bytes: &Arc<Vec<u8>>) -> Arc<Vec<u8>> {
+    let Some(display) = editor.and_then(|e| pdfcraft_annot::with_missing_appearances(&e.cos)) else { return bytes.clone() };
+    // Writing fails only as saving the document would; the page then shows as it always did.
+    write_incremental(&display, &SaveOptions::default()).map(Arc::new).unwrap_or_else(|_| bytes.clone())
+}
+
 fn render_threads() -> usize {
     std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 8) - 1
+}
+
+/// Render `doc` with the layer visibility in its `info.layers`.
+fn use_layer_choices(doc: &mut Document) {
+    let overrides: Vec<(i32, i32, bool)> = doc.info.layers.iter().map(|l| (l.id.0 as i32, l.id.1 as i32, l.visible)).collect();
+    doc.config.layers = Arc::new(overrides);
+    doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+}
+
+/// Apply a set-layer-visibility action to `layers`, one change at a time, so a toggle flips the
+/// state the changes before it left. Returns whether any layer ended up changed.
+fn apply_layer_state(layers: &mut [Layer], groups: &[Vec<(u32, u16)>], changes: &[(LayerOp, (u32, u16))], preserve_rb: bool) -> bool {
+    let before: Vec<bool> = layers.iter().map(|l| l.visible).collect();
+    let index: std::collections::HashMap<(u32, u16), usize> = layers.iter().enumerate().map(|(i, l)| (l.id, i)).collect();
+    for &(op, ocg) in changes {
+        let Some(layer) = index.get(&ocg).and_then(|&i| layers.get_mut(i)) else { continue };
+        let on = match op {
+            LayerOp::On => true,
+            LayerOp::Off => false,
+            LayerOp::Toggle => !layer.visible,
+        };
+        layer.visible = on;
+        // Turning a layer off leaves the rest of its groups alone.
+        if on && preserve_rb {
+            for other in groups.iter().filter(|g| g.contains(&ocg)).flatten().filter(|&&o| o != ocg) {
+                if let Some(l) = index.get(other).and_then(|&i| layers.get_mut(i)) {
+                    l.visible = false;
+                }
+            }
+        }
+    }
+    layers.iter().zip(before).any(|(l, was)| l.visible != was)
 }
 
 /// A file to combine: its name (the bookmark title), bytes, and page range (`None`: all).
@@ -1402,7 +1450,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
         Edit::AddCustomStamp { page, rect, name, file, author } => {
             let src = mark_source(doc, file)?;
             let (sw, sh) = (src.size.0.max(1.0), src.size.1.max(1.0));
-            let rect = if (rect[2] - rect[0]).abs() < 1.0 || (rect[3] - rect[1]).abs() < 1.0 {
+            let rect = if rect[2] == rect[0] && rect[3] == rect[1] {
                 let k = (200.0 / sw.max(sh)).min(1.0);
                 let (w, h) = (sw * k, sh * k);
                 [rect[0] - w / 2.0, rect[1] - h / 2.0, rect[0] + w / 2.0, rect[1] + h / 2.0]
@@ -1700,17 +1748,55 @@ pub fn guard<T>(f: impl FnOnce() -> T) -> Result<T, String> {
     })
 }
 
+/// The most files Create ▸ Multiple files takes in one run.
+pub const MAX_CREATE_FILES: usize = 1000;
+
 /// Parse another PDF to copy pages from.
 fn open_source(name: &str, bytes: &Arc<Vec<u8>>) -> Result<pdfcraft_cos::Document, EditError> {
-    match std::panic::catch_unwind(|| pdfcraft_cos::Document::open(bytes.clone())) {
-        Ok(Ok(d)) if d.permissions().is_some_and(|p| !p.assemble()) => {
-            Err(EditError::Source(format!("{name}: its security settings don't allow copying pages")))
-        }
+    open_source_with(name, bytes, None)
+}
+
+/// [`open_source`], authenticating with `password` (user or owner) for an encrypted file.
+fn open_source_with(name: &str, bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Result<pdfcraft_cos::Document, EditError> {
+    source_document(bytes, password).map_err(|p| EditError::Source(format!("{name}: {p}")))
+}
+
+/// Why a file can't be a source for Combine Files (or Insert / Replace pages).
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum SourceProblem {
+    #[error("it is password-protected")]
+    Password,
+    #[error("the password is wrong")]
+    WrongPassword,
+    #[error("its security settings don't allow copying pages")]
+    NotPermitted,
+    #[error("{0}")]
+    Unreadable(String),
+}
+
+fn source_document(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Result<pdfcraft_cos::Document, SourceProblem> {
+    match std::panic::catch_unwind(|| pdfcraft_cos::Document::open_with_password(bytes.clone(), password)) {
+        Ok(Ok(d)) if d.permissions().is_some_and(|p| !p.assemble()) => Err(SourceProblem::NotPermitted),
         Ok(Ok(d)) => Ok(d),
-        Ok(Err(pdfcraft_cos::CosError::NeedsPassword)) => Err(EditError::Source(format!("{name}: it is password-protected"))),
-        Ok(Err(e)) => Err(EditError::Source(format!("{name}: {e}"))),
-        Err(_) => Err(EditError::Source(format!("{name}: the file could not be read"))),
+        Ok(Err(pdfcraft_cos::CosError::NeedsPassword)) => Err(SourceProblem::Password),
+        Ok(Err(pdfcraft_cos::CosError::WrongPassword)) => Err(SourceProblem::WrongPassword),
+        Ok(Err(e)) => Err(SourceProblem::Unreadable(e.to_string())),
+        Err(_) => Err(SourceProblem::Unreadable("the file could not be read".into())),
     }
+}
+
+/// Whether `bytes` can be combined, opened with `password` (user or owner) if given, and if not
+/// why: what Combine would refuse it for, so the Combine files list can say so before Combine
+/// is pressed. The owner (permissions) password lifts the restriction on copying pages.
+pub fn combine_source_check(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Result<(), SourceProblem> {
+    source_document(bytes, password).map(|_| ())
+}
+
+/// The number of pages of `bytes`, opened with `password` (user or owner) if given, whatever
+/// its permissions allow; `None` when it can't be read.
+pub fn source_page_count(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Option<usize> {
+    let doc = std::panic::catch_unwind(|| pdfcraft_cos::Document::open_with_password(bytes.clone(), password)).ok()?.ok()?;
+    pdfcraft_organize::page_count(&doc).ok()
 }
 
 fn plural(s: &str, n: usize) -> String {
@@ -1763,6 +1849,8 @@ pub enum EditError {
     Sign(String),
     #[error("{0}")]
     Optimize(String),
+    #[error("cancelled")]
+    Cancelled,
     #[error("{0} isn't possible in a signed document: it would rewrite the file and invalidate the signatures")]
     SignedRewrite(String),
     #[error("this document is signed: rewriting it would invalidate its signatures (save it incrementally instead)")]
@@ -2095,7 +2183,6 @@ impl Session {
         xfa: Option<XfaLayout>,
     ) -> Result<DocId, OpenError> {
         let config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
-        let renderer = RenderPool::new(bytes.clone(), render_threads(), config.clone());
         let (editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
                 let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned) };
@@ -2104,6 +2191,8 @@ impl Session {
             Ok(Err(e)) => (None, Some(e.to_string())),
             Err(_) => (None, Some("the document structure could not be read for editing".into())),
         };
+        let display = display_bytes(editor.as_ref(), &bytes);
+        let renderer = RenderPool::new(display.clone(), render_threads(), config.clone());
         let mut form = editor.as_ref().map(|e| pdfcraft_forms::fields(&e.cos)).unwrap_or_default();
         if let Some(e) = editor.as_ref() {
             xfa::mark_script_buttons(&e.cos, &mut form);
@@ -2120,6 +2209,7 @@ impl Session {
             name,
             path,
             bytes,
+            display,
             info,
             renderer,
             password: render_password,
@@ -2338,8 +2428,9 @@ impl Session {
         if !doc.signatures.is_empty() {
             doc.signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
         }
-        doc.bytes = bytes.clone();
-        doc.renderer = RenderPool::new(bytes, render_threads(), doc.config.clone());
+        doc.display = display_bytes(Some(editor), &bytes);
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.bytes = bytes;
         Ok(())
     }
 
@@ -2374,8 +2465,9 @@ impl Session {
         doc.added = pdfcraft_edit::list_added(&editor.cos);
         doc.links = pdfcraft_annot::links::list(&editor.cos);
         doc.signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
-        doc.bytes = bytes.clone();
-        doc.renderer = RenderPool::new(bytes, render_threads(), doc.config.clone());
+        doc.display = display_bytes(Some(editor), &bytes);
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.bytes = bytes;
         Ok(())
     }
 
@@ -2471,6 +2563,23 @@ impl Session {
         self.write_new(&pdfcraft_create::from_text(title, text, pdfcraft_create::LETTER, 11.0)?)
     }
 
+    /// Convert a file Create understands (an image or plain text) to PDF bytes; a PDF is checked
+    /// (it must open and allow copying pages) and returned as it is.
+    pub fn convert_to_pdf(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
+        let Some(kind) = source_kind(name, bytes) else {
+            return Err(EditError::Source(format!("{name}: this file type can't be converted; use a PDF, an image or a .txt file")));
+        };
+        let title = name.rsplit_once('.').map_or(name, |(s, _)| s);
+        // Image decoders read untrusted bytes: a panic in one must not take the app down.
+        let created = guard(|| match kind {
+            SourceKind::Pdf => open_source(name, bytes).map(|_| bytes.clone()),
+            SourceKind::Image => self.create_from_images(&[(name.to_string(), bytes.to_vec())]),
+            SourceKind::Text => self.create_from_text(title, &String::from_utf8_lossy(bytes)),
+        })
+        .map_err(|_| EditError::Source(format!("{name}: the file could not be read")))?;
+        Ok((kind, created?))
+    }
+
     /// Reduce File Size: Acrobat's defaults (images above 225 ppi to 150 ppi, JPEG medium
     /// quality; thumbnails dropped), identical resources merged, unused objects dropped, objects
     /// packed into compressed object streams. Returns the bytes and how many objects were
@@ -2482,21 +2591,10 @@ impl Session {
 
     /// Optimize PDF ▸ Advanced optimization: `settings` for images and objects, plus Remove
     /// Hidden Information's `discard` categories (user data). A full rewrite: signed documents
-    /// are refused. The open document is not changed.
+    /// are refused. The open document is not changed. This is [`Self::optimize_job`] run in
+    /// place, without progress.
     pub fn optimized_bytes(&self, id: DocId, settings: &optimize::Settings, discard: &[Hidden]) -> Result<(Arc<Vec<u8>>, OptimizeReport), EditError> {
-        let doc = self.get(id).ok_or(EditError::NoDocument)?;
-        if doc.is_signed() {
-            return Err(EditError::Signed);
-        }
-        let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
-        let mut cos = editor.cos.clone();
-        let discarded = if discard.is_empty() { Vec::new() } else { pdfcraft_redact::sanitize::remove_hidden(&mut cos, discard)? };
-        let report = optimize::optimize(&mut cos, settings).map_err(|e| EditError::Optimize(e.to_string()))?;
-        let all: Vec<pdfcraft_cos::ObjRef> = cos.object_numbers().into_iter().map(|n| pdfcraft_cos::ObjRef::new(n, cos.generation(n))).collect();
-        let merged = pdfcraft_organize::dedupe_resources(&mut cos, &all, false);
-        let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
-        let bytes = write_full(&cos, &opts).map_err(|e| EditError::Write(e.to_string()))?;
-        Ok((Arc::new(bytes), OptimizeReport { optimize: report, merged, discarded }))
+        self.optimize_job(id, settings, discard)?.run(|_| true)
     }
 
     /// Export comments and/or form data: XFDF and FDF carry either or both; XML, CSV and text
@@ -2542,7 +2640,17 @@ impl Session {
 
     /// Combine Files with a page range per file ("1-3, 6"; `None` or empty for all pages).
     pub fn combine_ranges(&self, sources: &[CombineSource]) -> Result<Arc<Vec<u8>>, EditError> {
-        let docs = sources.iter().map(|(n, b, _)| open_source(n, b)).collect::<Result<Vec<_>, _>>()?;
+        self.combine_unlocked(sources, &[])
+    }
+
+    /// [`Self::combine_ranges`] with the password each encrypted source is opened with, by
+    /// position (missing or `None`: no password). The result is not encrypted.
+    pub fn combine_unlocked(&self, sources: &[CombineSource], passwords: &[Option<&str>]) -> Result<Arc<Vec<u8>>, EditError> {
+        let docs = sources
+            .iter()
+            .enumerate()
+            .map(|(i, (n, b, _))| open_source_with(n, b, passwords.get(i).copied().flatten()))
+            .collect::<Result<Vec<_>, _>>()?;
         let mut pages = Vec::with_capacity(docs.len());
         for ((name, _, range), d) in sources.iter().zip(&docs) {
             let range = range.as_deref().map(str::trim).filter(|r| !r.is_empty());
@@ -2721,9 +2829,21 @@ impl Session {
             return false;
         }
         l.visible = visible;
-        let overrides: Vec<(i32, i32, bool)> = doc.info.layers.iter().map(|l| (l.id.0 as i32, l.id.1 as i32, l.visible)).collect();
-        doc.config.layers = Arc::new(overrides);
-        doc.renderer = RenderPool::new(doc.bytes.clone(), render_threads(), doc.config.clone());
+        use_layer_choices(doc);
+        true
+    }
+
+    /// Run a set-layer-visibility action (`SetOCGState`): apply `changes` in order, naming each
+    /// layer by its optional content group; groups that aren't layers are skipped. With
+    /// `preserve_rb`, a layer turned on turns off the other layers of its radio-button groups.
+    /// Returns `true` if any layer changed; callers must drop cached rasters and text for the
+    /// document, as for [`Self::set_layer_visible`].
+    pub fn set_layer_state(&mut self, id: DocId, changes: &[(LayerOp, (u32, u16))], preserve_rb: bool) -> bool {
+        let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) else { return false };
+        if !apply_layer_state(&mut doc.info.layers, &doc.info.layer_groups, changes, preserve_rb) {
+            return false;
+        }
+        use_layer_choices(doc);
         true
     }
 
@@ -2735,7 +2855,7 @@ impl Session {
             return false;
         }
         doc.config.hide_comments = hide;
-        doc.renderer = RenderPool::new(doc.bytes.clone(), render_threads(), doc.config.clone());
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
         doc.generation += 1;
         true
     }

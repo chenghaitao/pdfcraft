@@ -17,8 +17,9 @@ impl PdfCraftApp {
     /// Whether a registered command can run now. The engine judges the document (security,
     /// contents, undo history); view state it can't see is checked here.
     pub(crate) fn command_enabled(&self, spec: &CommandSpec) -> bool {
-        if self.viewer_only && !commands::viewer_visible(spec) {
-            return false;
+        // Undo and Redo act on the Combine files list while its tab shows.
+        if self.combine_showing() && matches!(spec.needs, commands::Needs::Undo | commands::Needs::Redo) {
+            return self.combine_can_undo(spec.needs == commands::Needs::Undo);
         }
         commands::is_enabled(spec, &self.session, self.active_ids().map(|(_, id)| id))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
@@ -42,39 +43,35 @@ impl PdfCraftApp {
     fn execute_unguarded(&mut self, id: &str) -> bool {
         let Some(spec) = commands::command(id) else { return false };
         if !self.command_enabled(spec) {
-            let why = if self.viewer_only && !commands::viewer_visible(spec) {
-                tl!("This is a read-only viewer; that command would change the document").to_string()
-            } else {
-                match spec.needs {
-                    commands::Needs::Undo => tl!("Nothing to undo").to_string(),
-                    commands::Needs::Redo => tl!("Nothing to redo").to_string(),
-                    commands::Needs::FillForms if self.active.is_some() => tl!("This document has no form fields you can fill in").to_string(),
-                    commands::Needs::HasComments if self.active.is_some() => tl!("This document has no comments to flatten").to_string(),
-                    commands::Needs::HasFields if self.active.is_some() => tl!("This document has no form fields to flatten").to_string(),
-                    commands::Needs::HasRedactions if self.active.is_some() => {
-                        tl!("There are no redaction marks (mark text, areas or pages first)").to_string()
-                    }
-                    commands::Needs::Marks(k) if self.active.is_some() => {
-                        let kind = match k {
-                            pdfcraft_engine::MarkKind::HeaderFooter => tl!("header or footer"),
-                            pdfcraft_engine::MarkKind::Watermark => tl!("watermark"),
-                            pdfcraft_engine::MarkKind::Background => tl!("background"),
-                        };
-                        crate::i18n::fmt(tl!("This document has no {kind} to change"), &[("kind", kind)])
-                    }
-                    commands::Needs::Security | commands::Needs::ProtectedSecurity if self.active.is_some() => {
-                        if self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.allows_security_change()) {
-                            tl!("This document isn't password-protected").to_string()
-                        } else {
-                            tl!("Only the document's owner can change its security (open it with the permissions password)").to_string()
-                        }
-                    }
-                    commands::Needs::Assembly | commands::Needs::Modification | commands::Needs::Annotate if self.active.is_some() => {
-                        tl!("The document's security settings don't allow this change").to_string()
-                    }
-                    commands::Needs::TwoPageView if self.active.is_some() => tl!("Switch to two-page view first to show the cover page").to_string(),
-                    _ => tl!("Open a document first").to_string(),
+            let why = match spec.needs {
+                commands::Needs::Undo => tl!("Nothing to undo").to_string(),
+                commands::Needs::Redo => tl!("Nothing to redo").to_string(),
+                commands::Needs::FillForms if self.active.is_some() => tl!("This document has no form fields you can fill in").to_string(),
+                commands::Needs::HasComments if self.active.is_some() => tl!("This document has no comments to flatten").to_string(),
+                commands::Needs::HasFields if self.active.is_some() => tl!("This document has no form fields to flatten").to_string(),
+                commands::Needs::HasRedactions if self.active.is_some() => {
+                    tl!("There are no redaction marks (mark text, areas or pages first)").to_string()
                 }
+                commands::Needs::Marks(k) if self.active.is_some() => {
+                    let kind = match k {
+                        pdfcraft_engine::MarkKind::HeaderFooter => tl!("header or footer"),
+                        pdfcraft_engine::MarkKind::Watermark => tl!("watermark"),
+                        pdfcraft_engine::MarkKind::Background => tl!("background"),
+                    };
+                    crate::i18n::fmt(tl!("This document has no {kind} to change"), &[("kind", kind)])
+                }
+                commands::Needs::Security | commands::Needs::ProtectedSecurity if self.active.is_some() => {
+                    if self.active_ids().and_then(|(_, id)| self.session.get(id)).is_some_and(|d| d.allows_security_change()) {
+                        tl!("This document isn't password-protected").to_string()
+                    } else {
+                        tl!("Only the document's owner can change its security (open it with the permissions password)").to_string()
+                    }
+                }
+                commands::Needs::Assembly | commands::Needs::Modification | commands::Needs::Annotate if self.active.is_some() => {
+                    tl!("The document's security settings don't allow this change").to_string()
+                }
+                commands::Needs::TwoPageView if self.active.is_some() => tl!("Switch to two-page view first to show the cover page").to_string(),
+                _ => tl!("Open a document first").to_string(),
             };
             self.notify(why);
             return false;
@@ -83,7 +80,13 @@ impl PdfCraftApp {
         let targets = active.map(|i| self.views[i].target_pages()).unwrap_or_default();
         match id {
             "file.open" => self.open_dialog(),
-            "page.combine" => self.combine_dialog(),
+            "file.open_recent" => match self.recent.first().map(|r| r.path.clone()) {
+                // The palette runs commands without a submenu: open the most recent file.
+                Some(p) => self.open_recent(&p),
+                None => self.notify_tr("No recent files"),
+            },
+            "file.pin_folder" => self.pin_folder_dialog(),
+            "page.combine" => self.open_combine_tab(),
             "file.save" => {
                 self.save_active(SaveTarget::InPlace);
             }
@@ -128,6 +131,17 @@ impl PdfCraftApp {
             "edit.find" => {
                 if let Some(i) = active {
                     self.views[i].open_find();
+                }
+            }
+            "view.focus_page_input" => {
+                if let (Some(ctx), Some(view)) = (self.ctx.clone(), active.and_then(|i| self.views.get(i))) {
+                    // The page box in the toolbar (chrome.rs); select its number so typing replaces it.
+                    let id = egui::Id::new("page-input");
+                    ctx.memory_mut(|m| m.request_focus(id));
+                    let mut state = egui::TextEdit::load_state(&ctx, id).unwrap_or_default();
+                    let len = view.page_input.chars().count();
+                    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(len))));
+                    state.store(&ctx, id);
                 }
             }
             "view.palette" => self.palette_open = !self.palette_open,
@@ -194,10 +208,10 @@ impl PdfCraftApp {
                 self.apply_edit(Edit::Flatten { comments: true, fields: false });
             }
             "form.flatten" => {
-                if let Some(i) = active {
-                    self.views[i].forms.focus = None;
+                // Flatten what's typed in a field too (#166); a refused value flattens nothing.
+                if self.commit_form_typing() {
+                    self.apply_edit(Edit::Flatten { comments: false, fields: true });
                 }
-                self.apply_edit(Edit::Flatten { comments: false, fields: true });
             }
             "form.clear" => {
                 if let Some(i) = active {
@@ -474,6 +488,7 @@ impl PdfCraftApp {
             }
             "create.blank" => self.create_blank(),
             "create.file" => self.open_dialog(),
+            "create.multiple" => self.create_multiple_dialog(),
             "create.images" => self.create_from_images_dialog(),
             "create.clipboard" => self.create_from_clipboard(),
             "optimize.reduce" => self.reduce_file_size(),
@@ -510,6 +525,11 @@ impl PdfCraftApp {
     pub(crate) fn registry_shortcuts(&mut self, ctx: &egui::Context) {
         use egui::{Key, KeyboardShortcut, Modifiers};
         let typing = ctx.egui_wants_keyboard_input();
+        // A form field's editor is open on the page: its text isn't in the document until
+        // committed. (Not egui's keyboard focus: an Escape in this frame has already cleared that,
+        // while the field has yet to see the Escape and discard its draft.)
+        let active = self.active_ids();
+        let form_typing = active.and_then(|(i, _)| self.views.get(i)).is_some_and(|v| v.forms.focus.is_some());
         let mut specs: Vec<&CommandSpec> = COMMANDS.iter().filter(|c| c.shortcut.is_some()).collect();
         specs.sort_by_key(|c| std::cmp::Reverse(c.shortcut.map(|s| s.modifier_count()).unwrap_or(0)));
         for spec in specs {
@@ -529,7 +549,15 @@ impl PdfCraftApp {
                 m |= Modifiers::CTRL;
             }
             if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, key))) {
-                self.execute(spec.id);
+                if form_typing {
+                    // A form field has the keyboard: let it take this frame's typing (and
+                    // Escape) first, so ⌘S saves what's on screen (#166). Runs next frame, for
+                    // this document only.
+                    self.deferred_commands.push((spec.id, active.map(|(_, id)| id)));
+                    ctx.request_repaint();
+                } else {
+                    self.execute(spec.id);
+                }
             }
         }
     }
@@ -538,10 +566,31 @@ impl PdfCraftApp {
 /// Render a top-level menu's registered commands (with live labels, shortcuts and enablement).
 pub(crate) fn registry_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui, menu: &str) {
     let mac = cfg!(target_os = "macos") || cfg!(target_arch = "wasm32");
-    let viewer_only = app.viewer_only;
-    for spec in commands::menu(menu).filter(|s| !viewer_only || commands::viewer_visible(s)) {
+    for spec in commands::menu(menu) {
         let label = commands::current_label(spec, &app.session, app.active_ids().map(|(_, id)| id));
         let label = crate::i18n::menu_label(spec.id, &label);
+        // Open Recent is a submenu of the live recent list, not one action: disabled while the
+        // list is empty, otherwise each entry opens its file (or focuses the tab showing it).
+        if spec.id == "file.open_recent" {
+            if app.recent.is_empty() {
+                ui.add_enabled(false, egui::Button::new(label));
+                continue;
+            }
+            let mut open: Option<String> = None;
+            ui.menu_button(label, |ui| {
+                for r in &app.recent {
+                    if ui.button(&r.name).on_hover_text(&r.path).clicked() {
+                        open = Some(r.path.clone());
+                        ui.close();
+                    }
+                }
+            });
+            if let Some(p) = open {
+                app.open_recent(&p);
+                ui.close();
+            }
+            continue;
+        }
         let shortcut = spec.shortcut.map(|s| s.label(mac)).unwrap_or_default();
         let enabled = app.command_enabled(spec);
         let resp = ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut));
