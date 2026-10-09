@@ -382,6 +382,11 @@ git clone https://github.com/storytold/craft-fonts ../craft-fonts
 CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p pdfcraft -- some.pdf
 ```
 
+Built without that input, the desktop app draws interface text no bundled face has with one
+already installed on the machine (Microsoft YaHei on Windows, PingFang on macOS, Noto Sans CJK on
+Linux), so a Chinese or Japanese label stays readable instead of showing a box; `PDFCRAFT_SYSTEM_FONTS=0`
+turns that fallback off.
+
 Each [GitHub release](https://github.com/storytold/pdfcraft/releases) has ready-made builds for macOS,
 Windows, Linux (AppImage, Flatpak, `.deb`, `.rpm` and a tarball), FreeBSD and the web; see
 [Downloads](#downloads). On Gentoo, the community [::snakebyte

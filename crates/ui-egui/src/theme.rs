@@ -138,24 +138,50 @@ pub fn install_fonts_for(ctx: &egui::Context, prefer_hans: bool) {
     ctx.set_fonts(installed_font_definitions(prefer_hans));
 }
 
-/// The name of the installed face [`installed_font_definitions`] may add after the embedded ones.
-pub const SYSTEM_FALLBACK: &str = "system-fallback";
+/// The names of the installed faces [`installed_font_definitions`] may add after the embedded
+/// ones, one per script group.
+pub const SYSTEM_FALLBACK_CJK: &str = "system-fallback-cjk";
+pub const SYSTEM_FALLBACK_ARABIC: &str = "system-fallback-arabic";
+pub const SYSTEM_FALLBACK_TELUGU: &str = "system-fallback-telugu";
 
 /// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, one face
-/// already installed on this machine as the last fallback of every family. It only draws
-/// characters no embedded face has (an Arabic file name in a build without craft-fonts);
-/// `PDFCRAFT_SYSTEM_FONTS=0` leaves it out.
+/// already installed on this machine per script no embedded face covers, as the last fallback of
+/// every family. A build without craft-fonts has no Chinese, Japanese, Arabic or Telugu glyph at
+/// all, and this is what draws them — a Chinese menu is Microsoft YaHei on Windows — instead of
+/// egui's replacement box. `PDFCRAFT_SYSTEM_FONTS=0` leaves the installed faces out.
 pub fn installed_font_definitions(prefer_hans: bool) -> FontDefinitions {
     #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
     let mut fonts = font_definitions_for(prefer_hans);
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(data) = crate::system_fonts::fallback() {
-        fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);
+    for (name, data) in system_fallbacks(prefer_hans) {
+        fonts.font_data.insert(name.to_owned(), data);
         for stack in fonts.families.values_mut() {
-            stack.push(SYSTEM_FALLBACK.to_owned());
+            stack.push(name.to_owned());
         }
     }
     fonts
+}
+
+/// The installed faces for the scripts the embedded ones leave out, with their family names.
+///
+/// A group the build input already covers is left out: a fallback that can never be reached only
+/// costs memory, and the CJK faces are 17–22 MB. The order is the families' order — CJK, Arabic,
+/// Telugu — so with every group missing the script with the widest coverage is tried first.
+#[cfg(not(target_arch = "wasm32"))]
+fn system_fallbacks(prefer_hans: bool) -> Vec<(&'static str, Arc<FontData>)> {
+    use crate::system_fonts::{self, Script};
+
+    let cjk = if prefer_hans { pdfcraft_fonts::ui_chinese_fonts().is_empty() } else { pdfcraft_fonts::ui_japanese_fonts().is_empty() };
+    let wanted = [
+        (Script::Cjk, SYSTEM_FALLBACK_CJK, cjk),
+        (Script::Arabic, SYSTEM_FALLBACK_ARABIC, pdfcraft_fonts::ui_arabic_fonts().is_empty()),
+        (Script::Telugu, SYSTEM_FALLBACK_TELUGU, pdfcraft_fonts::ui_telugu_fonts().is_empty()),
+    ];
+    wanted
+        .iter()
+        .filter(|(_, _, missing)| *missing)
+        .filter_map(|(script, name, _)| system_fonts::fallback(*script).map(|data| (*name, data)))
+        .collect()
 }
 
 /// The interface fonts: Inter (and JetBrains Mono for code) first, then egui's defaults, then

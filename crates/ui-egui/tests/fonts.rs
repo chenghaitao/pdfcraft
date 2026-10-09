@@ -1,7 +1,7 @@
 //! The interface fonts with and without the optional craft-fonts build input (`CRAFT_FONTS_DIR`).
 
 use egui::epaint::text::{Fonts, TextOptions};
-use egui::{Color32, FontFamily, FontId};
+use egui::{Color32, FontDefinitions, FontFamily, FontId};
 use pdfcraft_ui_egui::theme;
 
 const JAPANESE: &str = "日本語の文字";
@@ -124,27 +124,50 @@ fn telugu_ui_text_uses_craft_fonts() {
     }
 }
 
-/// On a machine with a suitable installed font, the installed definitions end every family
-/// with it and Arabic text has glyphs; the embedded-only definitions never name it.
+/// The names of the installed faces the definitions actually picked up, in family order.
+fn installed_faces(defs: &FontDefinitions) -> Vec<&'static str> {
+    [theme::SYSTEM_FALLBACK_CJK, theme::SYSTEM_FALLBACK_ARABIC, theme::SYSTEM_FALLBACK_TELUGU]
+        .into_iter()
+        .filter(|n| defs.font_data.contains_key(*n))
+        .collect()
+}
+
+/// The case a local build without craft-fonts is in: the scripts the build input leaves out —
+/// Chinese here — are drawn by an installed face, and the installed definitions end every family
+/// with those faces, once each, in order. The embedded-only definitions never name one.
 #[test]
 fn system_fallback_fills_missing_scripts() {
-    assert!(!theme::font_definitions().font_data.contains_key(theme::SYSTEM_FALLBACK));
+    for name in [theme::SYSTEM_FALLBACK_CJK, theme::SYSTEM_FALLBACK_ARABIC, theme::SYSTEM_FALLBACK_TELUGU] {
+        assert!(!theme::font_definitions().font_data.contains_key(name), "{name} must not be embedded");
+    }
     let defs = theme::installed_font_definitions(false);
-    if !defs.font_data.contains_key(theme::SYSTEM_FALLBACK) {
+    let faces = installed_faces(&defs);
+    if faces.is_empty() {
         eprintln!("skipping system_fallback_fills_missing_scripts: no installed fallback font (or PDFCRAFT_SYSTEM_FONTS=0)");
-        assert!(defs.families.values().all(|stack| !stack.iter().any(|n| n == theme::SYSTEM_FALLBACK)));
         return;
     }
     for (family, stack) in &defs.families {
-        assert_eq!(stack.last().map(String::as_str), Some(theme::SYSTEM_FALLBACK), "{family:?}: {stack:?}");
-        assert_eq!(stack.iter().filter(|n| *n == theme::SYSTEM_FALLBACK).count(), 1, "{family:?}");
+        let tail: Vec<&str> = stack[stack.len() - faces.len()..].iter().map(String::as_str).collect();
+        assert_eq!(tail, faces, "{family:?}: {stack:?}");
     }
     let mut fonts = Fonts::new(TextOptions::default(), defs);
     for id in families() {
-        assert!(fonts.has_glyphs(&id, ARABIC), "{id:?} lacks {ARABIC}");
         assert!(fonts.has_glyphs(&id, "PdfCraft"), "{id:?}");
     }
-    assert!(layout_widths(&mut fonts, ARABIC).iter().all(|w| w.is_finite() && *w > 0.0));
+    if faces.contains(&theme::SYSTEM_FALLBACK_ARABIC) {
+        for id in families() {
+            assert!(fonts.has_glyphs(&id, ARABIC), "{id:?} lacks {ARABIC}");
+        }
+        assert!(layout_widths(&mut fonts, ARABIC).iter().all(|w| w.is_finite() && *w > 0.0));
+    }
+    // The Chinese interface of a build without craft-fonts: every family has real Han glyphs
+    // rather than egui's replacement box, which is what makes the labels readable.
+    if faces.contains(&theme::SYSTEM_FALLBACK_CJK) {
+        for id in families() {
+            assert!(fonts.has_glyphs(&id, CHINESE), "{id:?} lacks {CHINESE}");
+        }
+        assert!(layout_widths(&mut fonts, CHINESE).iter().all(|w| w.is_finite() && *w > 0.0));
+    }
 }
 
 /// Without craft-fonts the interface fonts still install and lay out any text (Japanese falls

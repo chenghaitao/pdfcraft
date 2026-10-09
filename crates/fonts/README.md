@@ -18,7 +18,8 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
 
 - `ui_japanese_fonts`: the `Jpan` faces for the interface, BIZ UDPGothic first.
 - `ui_chinese_fonts`: the `Hans` faces for the interface, in manifest order (without one,
-  Chinese characters the Japanese faces lack show the replacement glyph).
+  Chinese characters the Japanese faces lack fall through to the interface's last resort, one
+  face already installed on the machine; see `pdfcraft-ui-egui`'s `system_fonts`).
 - `ui_cjk_fonts(prefer_hans)`: both in fallback order for the UI language (Chinese group first
   in Chinese mode, so one line never mixes faces with different vertical metrics).
 - `ui_arabic_fonts`: the `Arab` faces for Arabic-script interface text (file names, document

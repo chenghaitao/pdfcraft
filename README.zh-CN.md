@@ -380,6 +380,10 @@ git clone https://github.com/storytold/craft-fonts ../craft-fonts
 CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p pdfcraft -- some.pdf
 ```
 
+在不带该输入的情况下构建时，桌面端会用本机已安装的字体来绘制内嵌字体不包含的界面文字
+（Windows 用微软雅黑、macOS 用苹方、Linux 用 Noto Sans CJK），因此中文或日文标签仍然可读，
+不会再显示成方块；设置 `PDFCRAFT_SYSTEM_FONTS=0` 可关闭这一回退。
+
 每个 [GitHub 发布版](https://github.com/storytold/pdfcraft/releases) 都提供 macOS、Windows、
 Linux（AppImage、Flatpak、`.deb`、`.rpm` 和 tarball）、FreeBSD 和网页版的现成构建，见
 [下载](#下载)。在 Gentoo 上，社区的 [::snakebyte

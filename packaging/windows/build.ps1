@@ -63,7 +63,10 @@ function Invoke-Native([string] $What, [scriptblock] $Block) {
   Write-Step $What
   $previous = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
-  try { & $Block } finally { $ErrorActionPreference = $previous }
+  # Fold that diagnostic back into our own stdout: a caller whose preference is 'Stop' (a CI
+  # step, a parent script) would otherwise treat cargo's progress lines as a failure of *this*
+  # script even though it is still running.
+  try { & $Block 2>&1 | ForEach-Object { Write-Output ("$_" -replace "`r?`n$", '') } } finally { $ErrorActionPreference = $previous }
   if ($LASTEXITCODE -ne 0) { throw "$What failed with exit code $LASTEXITCODE" }
 }
 
@@ -105,9 +108,10 @@ $Version = Get-WorkspaceVersion
 $TargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $Root 'target' }
 $Bin = Join-Path $TargetDir "$Target\release"
 
-# A craft-fonts checkout is an optional build input; with one, the interface has real Japanese,
-# Chinese and Arabic glyphs instead of the font system's replacement ones. A checkout at
-# <root>\craft-fonts (git-ignored) is picked up automatically.
+# A craft-fonts checkout is an optional build input; with one, the interface has the crafted
+# Japanese, Chinese and Arabic glyphs. Without one the desktop app draws CJK interface text with
+# a face already installed on the machine (Microsoft YaHei on Windows) - readable, but not the
+# crafted face. A checkout at <root>\craft-fonts (git-ignored) is picked up automatically.
 $FontsDir = Join-Path $Root 'craft-fonts'
 $HaveFonts = (Test-Path $FontsDir) -and (Test-Path (Join-Path $FontsDir 'fonts'))
 if ($HaveFonts -and -not $env:CRAFT_FONTS_DIR) { $env:CRAFT_FONTS_DIR = $FontsDir }
@@ -139,7 +143,7 @@ foreach ($row in @(
     @('WiX v5', $(if ($Wix) { $Wix } elseif ($PortableOnly) { 'not needed (-PortableOnly)' } else { "not installed (will install $WixVersion)" })),
     @('signtool', $(if (Get-Tool 'signtool.exe') { 'on PATH' } else { 'the Windows SDK one' })),
     @('signing', $(if ($env:WINDOWS_CERTIFICATE -or $env:AZURE_SIGNING_ACCOUNT) { 'configured' } else { 'not configured - artifacts stay unsigned' })),
-    @('craft-fonts', $(if ($HaveFonts) { $FontsDir } else { 'no checkout - CJK interface text shows replacement glyphs' })),
+    @('craft-fonts', $(if ($HaveFonts) { $FontsDir } else { 'no checkout - CJK text falls back to an installed face' })),
     @('output', $Dist)
   )) {
   Write-Output ("  {0,-14} {1}" -f $row[0], $row[1])
