@@ -1,6 +1,10 @@
-# PdfCraft reader scope: the subset of parity/acrobat-features.toml a read-only viewer
-# must deliver. Maintained by hand, like acrobat-features.toml; reported by
+# PdfCraft reader scope: the subset of parity/acrobat-features.toml the reader work comes
+# first for. Maintained by hand, like acrobat-features.toml; reported by
 # `cargo xtask parity --viewer` (see plan/VIEWER-ONLY-PLAN.md).
+#
+# Reporting only: this list never gates, hides or disables a command at runtime. Every
+# feature outside it stays implemented and reachable in the app; it is simply worked on
+# after the reader scope.
 
 # Rule: a feature is in scope when it can be completed without changing the bytes of the
 # document the user opened. Opening, rendering, navigating, searching, printing,
