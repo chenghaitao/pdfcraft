@@ -53,8 +53,10 @@ impl Script {
             let files: &[&str] = match self {
                 Script::Cjk => &["msyh.ttc", "msyh.ttf", "simsun.ttc", "simhei.ttf", "mingliu.ttc"],
                 Script::Arabic => &["segoeui.ttf", "tahoma.ttf", "arial.ttf"],
-                // Nirmala UI is Windows' Indic face; it ships with the language pack.
-                Script::Telugu => &["Nirmala.ttf", "nirmala.ttf"],
+                // Nirmala UI is Windows' Indic face; it ships with the language pack, and as a
+                // collection (`Nirmala.ttc`) rather than a bare `.ttf`, so a `.ttf`-only table
+                // never matches it. Windows paths are case-insensitive; one spelling is enough.
+                Script::Telugu => &["Nirmala.ttc", "Nirmala.ttf"],
             };
             files.iter().map(|f| dir.join("Fonts").join(f)).collect()
         } else if cfg!(target_os = "macos") {
@@ -192,5 +194,34 @@ mod tests {
         assert!(face.index < MAX_FACES, "{}", face.index);
         // The probe is a Han character, so a loaded face maps it by construction: 中 (U+4E2D).
         assert_eq!(Script::Cjk.probe(), '\u{4E2D}');
+    }
+
+    /// The Telugu face is a collection, not a bare `.ttf`: a candidate table that only names
+    /// `Nirmala.ttf` matches nothing on a stock Windows, leaving a Telugu file name as boxes.
+    #[test]
+    #[cfg(windows)]
+    fn the_windows_telugu_candidates_name_the_collection() {
+        let list = Script::Telugu.candidates();
+        assert_eq!(list.first().and_then(|p| p.file_name()).and_then(|n| n.to_str()), Some("Nirmala.ttc"), "{list:?}");
+        // A `.ttf` spelling stays as a second chance for an edition that ships one instead.
+        assert!(list.iter().any(|p| p.ends_with("Nirmala.ttf")), "{list:?}");
+    }
+
+    /// And the file really is read, with a Telugu glyph coming out of it (త, U+0C24). Skipped
+    /// where the Indic language pack is absent, which is a valid Windows install.
+    #[test]
+    #[cfg(windows)]
+    fn the_windows_telugu_face_loads_and_has_glyphs() {
+        if std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0") {
+            eprintln!("skipping the_windows_telugu_face_loads_and_has_glyphs: PDFCRAFT_SYSTEM_FONTS=0");
+            return;
+        }
+        let Some(face) = fallback(Script::Telugu) else {
+            eprintln!("skipping the_windows_telugu_face_loads_and_has_glyphs: no Telugu face installed");
+            return;
+        };
+        assert!(face.index < MAX_FACES, "{}", face.index);
+        // The probe is a Telugu character, so a loaded face maps it by construction.
+        assert_eq!(Script::Telugu.probe(), '\u{0C24}');
     }
 }
