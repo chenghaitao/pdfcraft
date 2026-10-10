@@ -6119,11 +6119,11 @@ title = "Signature properties (validity summary, signer, time)"
 area = "H"
 tier = "P0"
 milestone = "M9"
-status = "partial"
+status = "shipped"
 commands = ["sign.panel"]
 tools = ["sign_list"]
 evidence = ["crates/ui-egui/tests/signing.rs::drawing_a_signature_creating_an_id_signing_and_trusting"]
-notes = "validity summary, signer, issuer, time, algorithm in the panel; no separate properties dialog"
+notes = "a per-signature Signature Properties dialog opened from the panel: validity summary with the explanation lines, signer, issuer, valid range, signing time, a verified timestamp, reason, location, algorithm, permitted actions for a certification signature, field and page, plus Show certificate…, Export certificate… and View signed version. The panel's expanded entry repeats the same details inline; there is no separate menu command"
 
 [[feature]]
 id = "sign.certificate-viewer"
