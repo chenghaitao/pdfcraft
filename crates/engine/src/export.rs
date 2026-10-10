@@ -12,6 +12,8 @@ use crate::Document;
 pub struct Exporter {
     renderer: PageRenderer,
     pages: usize,
+    /// Each page's displayed size in points, for [`Exporter::dpi_used`].
+    sizes: Vec<(f32, f32)>,
 }
 
 /// What an export needs from a document, as plain values that can move to a worker thread.
@@ -20,12 +22,19 @@ pub struct ExportSource {
     pub bytes: std::sync::Arc<Vec<u8>>,
     pub config: pdfcraft_render::RenderConfig,
     pub pages: usize,
+    /// Each page's displayed size in points (after `/Rotate` and `/UserUnit`).
+    pub sizes: Vec<(f32, f32)>,
 }
 
 impl Document {
     /// The current state, for exporting on another thread.
     pub fn export_source(&self) -> ExportSource {
-        ExportSource { bytes: self.display.clone(), config: self.config.clone(), pages: self.info.pages.len() }
+        ExportSource {
+            bytes: self.display.clone(),
+            config: self.config.clone(),
+            pages: self.info.pages.len(),
+            sizes: self.info.pages.iter().map(|p| (p.width, p.height)).collect(),
+        }
     }
 }
 
@@ -46,8 +55,27 @@ impl Exporter {
         Self::from_source(doc.export_source())
     }
 
+    /// An exporter that draws a page too large for the renderer's size limits at the largest
+    /// resolution they allow, as the interactive Export does; [`Exporter::dpi_used`] says at what.
+    /// A source whose `config.reject_oversize` is set refuses such pages instead.
     pub fn from_source(src: ExportSource) -> Self {
-        Self { renderer: PageRenderer::new(src.bytes, src.config), pages: src.pages }
+        Self { renderer: PageRenderer::new(src.bytes, src.config), pages: src.pages, sizes: src.sizes }
+    }
+
+    /// The resolution page `page` is actually exported at when asked for `dpi`: lower than asked
+    /// when the page is too large for the tiled export's budget at that resolution
+    /// ([`Exporter::raster`]), or when the source asked the renderer to refuse an oversized raster
+    /// (`reject_oversize`), in which case the renderer's own size limits decide.
+    pub fn dpi_used(&self, page: usize, dpi: f64) -> f64 {
+        let dpi = dpi.clamp(18.0, 1200.0);
+        let Some(&(w, h)) = self.sizes.get(page) else { return dpi };
+        let scale = (dpi / 72.0) as f32;
+        let tiled = u64::from(pdfcraft_render::device_pixels(w, scale)) * u64::from(pdfcraft_render::device_pixels(h, scale));
+        if !self.renderer.reject_oversize() && tiled <= pdfcraft_render::MAX_TILED_PIXELS {
+            dpi
+        } else {
+            f64::from(pdfcraft_render::effective_scale(w, h, scale)) * 72.0
+        }
     }
 
     fn check(&self, page: usize) -> Result<(), String> {
@@ -56,7 +84,8 @@ impl Exporter {
 
     /// The page raster at `dpi`, tiled when one raster could not hold it (a letter page past
     /// ~965 dpi is wider than [`pdfcraft_render::MAX_SIDE`]), so a high resolution is honoured
-    /// instead of being pulled back to 8192 px.
+    /// instead of being pulled back to 8192 px. A source that asked for `reject_oversize` is
+    /// refused at such a resolution instead (`RenderConfig::reject_oversize`).
     fn raster(&mut self, page: usize, dpi: f64) -> Result<pdfcraft_render::RenderedPage, String> {
         let req = RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() };
         let r = self.renderer.render_best(req, pdfcraft_render::MAX_TILED_PIXELS);
@@ -66,7 +95,8 @@ impl Exporter {
         }
     }
 
-    /// Page `page` (0-based) as a PNG at `dpi` (capped by the renderer's size limits).
+    /// Page `page` (0-based) as a PNG at `dpi`, at most the renderer's size limits allow (see
+    /// [`Exporter::dpi_used`]); refused instead when the source asked for `reject_oversize`.
     pub fn png(&mut self, page: usize, dpi: f64) -> Result<Vec<u8>, String> {
         self.check(page)?;
         let r = self.raster(page, dpi)?;

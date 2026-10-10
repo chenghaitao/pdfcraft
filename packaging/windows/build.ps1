@@ -233,7 +233,20 @@ else {
   }
   # Fonts embedded from craft-fonts carry their own licences: fonts\<family>\OFL.txt -> OFL-<family>.txt.
   if ($env:CRAFT_FONTS_DIR) {
+    # A face crates/fonts/build.rs leaves out of the build (the `Hans` group, AGENTS.md §1.1) is not
+    # redistributed, so its licence is not shipped either: keep this in step with build.rs.
+    $notEmbedded = @{}
+    $manifest = Join-Path $env:CRAFT_FONTS_DIR 'fonts\manifest.txt'
+    if (Test-Path $manifest) {
+      foreach ($line in Get-Content $manifest) {
+        if ($line -match '^\s*#' -or $line -notmatch '\S') { continue }
+        $f = ($line -split '\|') | ForEach-Object { $_.Trim() }
+        # family | style | file | scripts | ... -> skip a face whose scripts include Hans.
+        if ($f.Count -ge 4 -and $f[3] -match '\bHans\b' -and $f[2] -match '^fonts/([^/]+)/') { $notEmbedded[$Matches[1]] = $true }
+      }
+    }
     Get-ChildItem -Path (Join-Path $env:CRAFT_FONTS_DIR 'fonts') -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+      if ($notEmbedded.ContainsKey($_.Name)) { return }
       $ofl = Join-Path $_.FullName 'OFL.txt'
       if (Test-Path $ofl) { Copy-Item $ofl (Join-Path $Portable "OFL-$($_.Name).txt") }
     }

@@ -142,7 +142,7 @@ Search the whole document as you type, step through matches with <kbd>⌘G</kbd>
 
 ## Navigate long documents
 
-Bookmarks, page thumbnails and the document's own page labels (i, ii, 1, 2…) keep you oriented in long documents.
+Bookmarks, page thumbnails and the document's own page labels (i, ii, 1, 2…) keep you oriented in long documents. Search bookmark titles in the Bookmarks panel to find nested entries even when their parents are collapsed. Matches keep their ancestors for context; Clear restores the unfiltered tree without changing its expansion state.
 
 <table>
 <tr>
@@ -180,6 +180,8 @@ Open **Organize pages** to see every page at once:
 - *Incremental:* the original bytes stay byte-for-byte intact.
 - *Atomic:* the file is written to a temporary copy, then swapped in.
 - *Verified:* independently checked with qpdf.
+
+When open documents exceed the window width, scroll over the tab strip with the mouse wheel or trackpad, or use its horizontal scrollbar. Opening or switching to a document brings its tab into view.
 
 Unsaved documents carry a dot on their tab, and closing or quitting asks before anything is lost. Changes are autosaved every minute. If PdfCraft ever quits unexpectedly, it offers to recover your work the next time it opens. Encrypted documents stay encrypted on disk.
 
@@ -310,15 +312,17 @@ Edits stay in memory, undoable, until `doc_save`. Saving to the same file append
 
 ### Driving the app itself
 
-Start the desktop app with `pdfcraft --control /tmp/pc.json` and an agent can see and operate the real interface: the widget tree with labels and positions (from the accessibility tree), clicks, typing, keys, commands, view options and screenshots. This is also off by default. It listens only on loopback, and every connection must present the random token written to that file, which only you can read.
+Start the desktop app with `pdfcraft --control ~/.pdfcraft-control.json` and an agent can see and operate the real interface: the widget tree with labels and positions (from the accessibility tree), clicks, typing, keys, commands, view options and screenshots. This is also off by default. It listens only on loopback, and every connection must present the random token written to that file, which only you can read.
+
+Keep the control file in a folder only you can write, not a shared one such as `/tmp`: another user could create the file there first and receive your commands. `pdfcraft-cli ui` refuses a control file that is a symbolic link, and on macOS, Linux and FreeBSD one that another user owns or can read or write. The app doesn't start if it can't write the file.
 
 ```sh
-pdfcraft-cli ui --control /tmp/pc.json inspect query=rotate      # find widgets
-pdfcraft-cli ui --control /tmp/pc.json click label="Organize pages"
-pdfcraft-cli ui --control /tmp/pc.json key key=K modifiers='["command"]'
-pdfcraft-cli ui --control /tmp/pc.json command id=comment.square   # pick a tool, then draw:
-pdfcraft-cli ui --control /tmp/pc.json drag from='[400,300]' to='[600,420]'
-pdfcraft-cli ui --control /tmp/pc.json screenshot --out window.png
+pdfcraft-cli ui --control ~/.pdfcraft-control.json inspect query=rotate      # find widgets
+pdfcraft-cli ui --control ~/.pdfcraft-control.json click label="Organize pages"
+pdfcraft-cli ui --control ~/.pdfcraft-control.json key key=K modifiers='["command"]'
+pdfcraft-cli ui --control ~/.pdfcraft-control.json command id=comment.square   # pick a tool, then draw:
+pdfcraft-cli ui --control ~/.pdfcraft-control.json drag from='[400,300]' to='[600,420]'
+pdfcraft-cli ui --control ~/.pdfcraft-control.json screenshot --out window.png
 ```
 
 ---
@@ -378,8 +382,8 @@ the engine or the operating system keep their own text. See
 [Simplified Chinese README](README.md).
 
 CJK fonts come from [craft-fonts](https://github.com/storytold/craft-fonts), an optional build
-input that every release includes. To build with them (CJK interface text, and Japanese text in
-edited PDFs):
+input that every release includes. To build with them (Japanese and Arabic interface text, and
+Japanese text in edited PDFs):
 
 ```sh
 git clone https://github.com/storytold/craft-fonts ../craft-fonts
@@ -391,9 +395,10 @@ already installed on the machine (Microsoft YaHei on Windows, PingFang on macOS,
 Linux), so a Chinese or Japanese label stays readable instead of showing a box; `PDFCRAFT_SYSTEM_FONTS=0`
 turns that fallback off. A group the input does cover is not drawn by an installed face at all, and on
 Windows `packaging\windows\build.ps1` picks up a `craft-fonts\` checkout beside the repository root
-on its own (`docs/releasing.md`). Simplified Chinese is drawn in the crafted face too, from the
-`Noto Sans CJK SC` the pinned input carries — except in the web build, which stays Latin and
-Japanese to fit the hosting limit.
+on its own (`docs/releasing.md`). The pinned input carries a `Hans` face (`Noto Sans CJK SC`) as well, but `crates/fonts/build.rs`
+does not embed it: it is Source Han Sans rebranded, which `AGENTS.md` §1.1 bars. Chinese labels are
+therefore drawn by the installed face, as above, and the web build — which embeds only BIZ UDPGothic
+Regular and the small Arabic face — is unchanged.
 
 Each [GitHub release](https://github.com/chenghaitao/pdfcraft/releases) has ready-made builds for macOS,
 Windows, Linux (AppImage, Flatpak, `.deb`, `.rpm` and a tarball), FreeBSD and the web; see
@@ -472,6 +477,9 @@ Use the MSI for your architecture. Per-user installation overrides are not suppo
 | Debian/Ubuntu | `pdfcraft-<ver>-linux-x86_64.deb` | `pdfcraft-<ver>-linux-aarch64.deb` | |
 | Fedora/RHEL/openSUSE | `pdfcraft-<ver>-linux-x86_64.rpm` | `pdfcraft-<ver>-linux-aarch64.rpm` | |
 | Tarball | `pdfcraft-<ver>-linux-x86_64.tar.gz` | `pdfcraft-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
+| Command-line tool | `pdfcraft-cli-<ver>-linux-x86_64.tar.gz` | `pdfcraft-cli-<ver>-linux-aarch64.tar.gz` | `pdfcraft-cli` alone (and its opt-in MCP server), for servers, CI and agents |
+
+Every Linux build needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL 10).
 
 ### FreeBSD
 

@@ -142,7 +142,7 @@ PdfCraft 渲染 PDF 时会照顾到那些让页面"看起来对"的细节：字�
 
 ## 在长文档中导航
 
-书签、页面缩略图，以及文档自带的自定义页码标签（i、ii、1、2……），让你在长文档中始终不迷失方向。
+书签、页面缩略图，以及文档自带的自定义页码标签（i、ii、1、2……），让你在长文档中始终不迷失方向。在书签面板中搜索书签标题，即使父项处于折叠状态也能找到嵌套条目。匹配项会保留其祖先作为上下文；清除则恢复未过滤的树，且不改变展开状态。
 
 <table>
 <tr>
@@ -180,6 +180,8 @@ PdfCraft 渲染 PDF 时会照顾到那些让页面"看起来对"的细节：字�
 - *增量：* 原始字节逐字节保持原样。
 - *原子：* 先写入临时副本，再整体替换。
 - *可验证：* 用 qpdf 独立校验。
+
+打开的文档超过窗口宽度时，把鼠标滚轮或触控板缩放在标签条上滚动，或使用它的水平滚动条。打开文档或切换到某文档时，其标签页会滚动到可见位置。
 
 未保存的文档，其标签页上会有一个圆点；关闭或退出前会先询问，避免内容丢失。改动每分钟自动保存一次。如果 PdfCraft 意外退出，下次打开时会询问是否恢复你的工作。加密文档在磁盘上保持加密。
 
@@ -310,15 +312,17 @@ pdfcraft-cli edit  in.pdf --rotate 1,2:90 --delete 5 --title "Q3" --out out.pdf
 
 ### 直接驱动应用本身
 
-用 `pdfcraft --control /tmp/pc.json` 启动桌面应用，智能体就能看到并操作真实界面：带标签和位置的控件树（来自无障碍树）、单击、输入、按键、命令、视图选项和截图。这同样是默认关闭的。它只监听回环地址，且每个连接都必须出示写入该文件的随机令牌，而这个文件只有你能读。
+用 `pdfcraft --control ~/.pdfcraft-control.json` 启动桌面应用，智能体就能看到并操作真实界面：带标签和位置的控件树（来自无障碍树）、单击、输入、按键、命令、视图选项和截图。这同样是默认关闭的。它只监听回环地址，且每个连接都必须出示写入该文件的随机令牌，而这个文件只有你能读。
+
+请把控制文件放在只有你能写入的目录里，不要放在 `/tmp` 这类共享目录：其他用户可能抢先创建该文件，从而接收你发出的命令。`pdfcraft-cli ui` 会拒绝符号链接形式的控制文件；在 macOS、Linux 和 FreeBSD 上，还会拒绝由其他用户拥有或可读写的控制文件。应用若无法写入该文件则不会启动。
 
 ```sh
-pdfcraft-cli ui --control /tmp/pc.json inspect query=rotate      # 查找控件
-pdfcraft-cli ui --control /tmp/pc.json click label="Organize pages"
-pdfcraft-cli ui --control /tmp/pc.json key key=K modifiers='["command"]'
-pdfcraft-cli ui --control /tmp/pc.json command id=comment.square   # 选一个工具，然后画：
-pdfcraft-cli ui --control /tmp/pc.json drag from='[400,300]' to='[600,420]'
-pdfcraft-cli ui --control /tmp/pc.json screenshot --out window.png
+pdfcraft-cli ui --control ~/.pdfcraft-control.json inspect query=rotate      # 查找控件
+pdfcraft-cli ui --control ~/.pdfcraft-control.json click label="Organize pages"
+pdfcraft-cli ui --control ~/.pdfcraft-control.json key key=K modifiers='["command"]'
+pdfcraft-cli ui --control ~/.pdfcraft-control.json command id=comment.square   # 选一个工具，然后画：
+pdfcraft-cli ui --control ~/.pdfcraft-control.json drag from='[400,300]' to='[600,420]'
+pdfcraft-cli ui --control ~/.pdfcraft-control.json screenshot --out window.png
 ```
 
 ---
@@ -373,7 +377,7 @@ Ctrl-逗号，没有打开文档时也可用；Auto 跟随系统语言；详见
 文件名、PDF 内容、作者名、自定义动作名，以及来自引擎或操作系统的错误详情，保持其原有文字。
 
 界面字体来自 [craft-fonts](https://github.com/storytold/craft-fonts)，这是一个可选构建输入，
-每个正式版都会包含。要自行构建（日文、简体中文、阿拉伯文界面文字，以及写入 PDF 的日文文字）：
+每个正式版都会包含。要自行构建（日文、阿拉伯文界面文字，以及写入 PDF 的日文文字）：
 
 ```sh
 git clone https://github.com/storytold/craft-fonts ../craft-fonts
@@ -384,9 +388,10 @@ CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p pdfcraft -- some.pdf
 （Windows 用微软雅黑、macOS 用苹方、Linux 用 Noto Sans CJK），因此中文或日文标签仍然可读，
 不会再显示成方块；设置 `PDFCRAFT_SYSTEM_FONTS=0` 可关闭这一回退。该输入已覆盖的脚本组不会再由系统字体
 绘制；Windows 上 `packaging\windows\build.ps1` 会自动接管放在仓库根目录旁的 `craft-fonts\`
-（见 `docs/releasing.md`）。简体中文同样用这个设计字体包里的 `Noto Sans CJK SC` 绘制，正式版
-固定的构建输入已包含它。网页版是例外：它只嵌入 BIZ UDPGothic Regular 与体积很小的阿拉伯文
-字面（Cloudflare Pages 单文件上限 25 MiB），所以浏览器里的中文仍显示替换字形。
+（见 `docs/releasing.md`）。固定的构建输入虽然也带一个 `Hans` 字面（`Noto Sans CJK SC`），但
+`crates/fonts/build.rs` 不会把它编进程序：它是 Source Han 换牌的字体，`AGENTS.md` §1.1 明文禁止。
+所以中文界面文字由本机字体绘制（如上文所述）；网页版则维持原样，只嵌入 BIZ UDPGothic Regular 与
+体积很小的阿拉伯文字面（Cloudflare Pages 单文件上限 25 MiB）。
 
 每个 [GitHub 发布版](https://github.com/chenghaitao/pdfcraft/releases) 都提供 macOS、Windows、
 Linux（AppImage、Flatpak、`.deb`、`.rpm` 和 tarball）、FreeBSD 和网页版的现成构建，见
@@ -464,6 +469,9 @@ msiexec /i "pdfcraft-<ver>-windows-x64.msi" /qn /norestart INSTALLDESKTOPSHORTCU
 | Debian/Ubuntu | `pdfcraft-<ver>-linux-x86_64.deb` | `pdfcraft-<ver>-linux-aarch64.deb` | |
 | Fedora/RHEL/openSUSE | `pdfcraft-<ver>-linux-x86_64.rpm` | `pdfcraft-<ver>-linux-aarch64.rpm` | |
 | Tarball | `pdfcraft-<ver>-linux-x86_64.tar.gz` | `pdfcraft-<ver>-linux-aarch64.tar.gz` | 解包即用 |
+| 命令行工具 | `pdfcraft-cli-<ver>-linux-x86_64.tar.gz` | `pdfcraft-cli-<ver>-linux-aarch64.tar.gz` | 仅 `pdfcraft-cli`（及其可选的 MCP 服务器），面向服务器、CI 与智能体 |
+
+所有 Linux 构建都需要 glibc 2.35 或更新（Ubuntu 22.04+、Debian 12+、Fedora 36+、RHEL 10）。
 
 ### FreeBSD
 

@@ -17,9 +17,10 @@ build input. `build.rs` embeds them as `CRAFT_FONTS` when the build sets
 set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
 
 - `ui_japanese_fonts`: the `Jpan` faces for the interface, BIZ UDPGothic first.
-- `ui_chinese_fonts`: the `Hans` faces for the interface, in manifest order (without one,
-  Chinese characters the Japanese faces lack fall through to the interface's last resort, one
-  face already installed on the machine; see `pdfcraft-ui-egui`'s `system_fonts`).
+- `ui_chinese_fonts`: the `Hans` faces for the interface, in manifest order. Empty in every build:
+  `build.rs` leaves the group out, since the only Chinese face the input carries is `Noto Sans CJK
+  SC`, which is Source Han Sans rebranded (`AGENTS.md` §1.1). Simplified Chinese is drawn by a face
+  already installed on the machine (see `pdfcraft-ui-egui`'s `system_fonts`).
 - `ui_cjk_fonts(prefer_hans)`: both in fallback order for the UI language (Chinese group first
   in Chinese mode, so one line never mixes faces with different vertical metrics).
 - `ui_arabic_fonts`: the `Arab` faces for Arabic-script interface text (file names, document
@@ -34,6 +35,13 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
   keep Mincho. Type 3 paths and advances both come from that selected face. Missing weights
   fall back to a real Regular face, never synthetic bold; no italic face is supplied. The
   default `document_japanese_font` / `japanese_glyph` APIs still use regular document Mincho.
+- `document_arabic_font` / `shape_arabic` / `arabic_glyph`: the first `Arab` face, shaped with
+  harfrust (joining forms, ligatures, mark positions) into clusters for Arabic text written into
+  PDFs; the editor draws each cluster as one Type 3 glyph with a ToUnicode entry. Without the face
+  they return `GlyphError::NoFont` and the editor reports a clear error.
+- `document_japanese_fonts_for_style`: every `Jpan` face in that order of preference, so the
+  editor can use the first one that has all of the replacement's glyphs (the faces differ in
+  coverage, e.g. of Cyrillic).
 - `SHIPPORI_MINCHO`: Shippori Mincho's bytes, or `None`.
 
 Generated Japanese Type 3 fonts record the fallback face's family and style in an indirect
@@ -45,7 +53,8 @@ only Gothic Regular, so it cannot preserve bold. No new font assets or changes t
 needed.
 
 wasm32 builds embed only BIZ UDPGothic Regular and any `Arab` or `Telu` face, to keep the web build small: the web build
-currently has no Chinese face, so Chinese there still shows the replacement glyph.
+has no Chinese face (neither has a desktop one: `build.rs` excludes the `Hans` group), so Chinese still shows the
+replacement glyph there.
 Font files are never
 committed here (`AGENTS.md` §1.4; team members: [craftrules `standards/fonts.md`](https://github.com/storytold/craftrules/blob/main/standards/fonts.md), internal).
 

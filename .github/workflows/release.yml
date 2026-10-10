@@ -72,8 +72,8 @@ jobs:
       PDFCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
-      # The craft-fonts build input (the interface's Japanese, Simplified Chinese and Arabic
-      # faces): every release embeds it. Bump deliberately.
+      # The craft-fonts build input (the interface's Japanese and Arabic faces; the Chinese face
+      # it carries is left out, AGENTS.md §1.1): every release embeds it. Bump deliberately.
       - name: Check out craft-fonts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -132,8 +132,8 @@ jobs:
       PDFCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
-      # The craft-fonts build input (the interface's Japanese, Simplified Chinese and Arabic
-      # faces): every release embeds it. Bump deliberately.
+      # The craft-fonts build input (the interface's Japanese and Arabic faces; the Chinese face
+      # it carries is left out, AGENTS.md §1.1): every release embeds it. Bump deliberately.
       - name: Check out craft-fonts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -192,8 +192,8 @@ jobs:
       NFPM_VERSION: 2.47.0
     steps:
       - uses: actions/checkout@v4
-      # The craft-fonts build input (the interface's Japanese, Simplified Chinese and Arabic
-      # faces): every release embeds it. Bump deliberately.
+      # The craft-fonts build input (the interface's Japanese and Arabic faces; the Chinese face
+      # it carries is left out, AGENTS.md §1.1): every release embeds it. Bump deliberately.
       - name: Check out craft-fonts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -216,7 +216,7 @@ jobs:
       - name: Apply version override
         if: inputs.version != ''
         run: cargo xtask version set "$PDFCRAFT_VERSION"
-      - name: Build and package (AppImage, deb, rpm, tar.gz)
+      - name: Build and package (AppImage, deb, rpm, tar.gz, CLI tar.gz)
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: "1"
@@ -225,7 +225,17 @@ jobs:
         run: |
           dpkg-deb --info dist/release/*.deb
           dpkg-deb --contents dist/release/*.deb | grep -E 'usr/bin/pdfcraft$|metainfo|applications'
+          # The OCR models (#103), where the installed app looks: <bin>/../share/pdfcraft/models.
+          dpkg-deb --contents dist/release/*.deb | grep -E 'usr/share/pdfcraft/models/.+\.rten$'
+          # Named exactly: dist/release also holds the CLI-only tar.gz, and `tar -tzf a b` reads b as a member.
+          tar -tzf "dist/release/pdfcraft-$PDFCRAFT_VERSION-linux-${{ matrix.arch }}.tar.gz" | grep -E '/share/pdfcraft/models/.+\.rten$'
           ldd target/release/pdfcraft
+          # The CLI-only archive: the binary and its licences, and it runs.
+          cli="dist/release/pdfcraft-cli-$PDFCRAFT_VERSION-linux-${{ matrix.arch }}.tar.gz"
+          tar -tzf "$cli" | grep -E '/pdfcraft-cli$'
+          tar -tzf "$cli" | grep -E '/LICENSE-APACHE$'
+          mkdir -p "$RUNNER_TEMP/cli" && tar -xzf "$cli" -C "$RUNNER_TEMP/cli"
+          "$RUNNER_TEMP/cli/pdfcraft-cli-$PDFCRAFT_VERSION-linux-${{ matrix.arch }}/pdfcraft-cli" --version
           python3 -c "import yaml; m = yaml.safe_load(open('packaging/linux/flatpak/ai.storyteller.pdfcraft.yml')); assert m['id'] == 'ai.storyteller.pdfcraft'"
           for appimage in dist/release/*.AppImage; do
             chmod +x "$appimage"
@@ -291,8 +301,8 @@ jobs:
       VERSION_OVERRIDE: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v4
-      # The craft-fonts build input (the interface's Japanese, Simplified Chinese and Arabic
-      # faces): every release embeds it. Bump deliberately.
+      # The craft-fonts build input (the interface's Japanese and Arabic faces; the Chinese face
+      # it carries is left out, AGENTS.md §1.1): every release embeds it. Bump deliberately.
       - name: Check out craft-fonts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -338,8 +348,8 @@ jobs:
       TRUNK_VERSION: 0.21.14
     steps:
       - uses: actions/checkout@v4
-      # The craft-fonts build input (the interface's Japanese, Simplified Chinese and Arabic
-      # faces): every release embeds it. Bump deliberately.
+      # The craft-fonts build input (the interface's Japanese and Arabic faces; the Chinese face
+      # it carries is left out, AGENTS.md §1.1): every release embeds it. Bump deliberately.
       - name: Check out craft-fonts
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:

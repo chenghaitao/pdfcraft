@@ -1,8 +1,11 @@
 //! Embeds the fonts of the optional craft-fonts build input (`CRAFT_FONTS_DIR`) as `CRAFT_FONTS`.
 //! The recipe is craft-fonts' `docs/integration.md`; unset, `CRAFT_FONTS` is empty. It only reads
-//! the local checkout (no network). On wasm32 it embeds only the UI faces (BIZ UDPGothic Regular
-//! and any `Arab` or `Telu` face), to keep the web build within hosting limits (Cloudflare Pages:
-//! 25 MiB per file).
+//! the local checkout (no network). The `Hans` group is left out: the only Chinese face that input
+//! carries is `Noto Sans CJK SC`, which is Source Han Sans rebranded, and `AGENTS.md` §1.1 bars
+//! Adobe-derived assets — so Simplified Chinese interface text is drawn by an installed face
+//! instead (`pdfcraft-ui-egui`'s `system_fonts`). On wasm32 it embeds only the UI faces (BIZ
+//! UDPGothic Regular and any `Arab` or `Telu` face), to keep the web build within hosting limits
+//! (Cloudflare Pages: 25 MiB per file).
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -39,6 +42,13 @@ fn craft_fonts(dir: &std::path::Path) -> Result<String, String> {
         let [family, style, file, scripts, ..] = f.as_slice() else {
             return Err(format!("malformed manifest line: {line}"));
         };
+        // A `Hans` face is not embedded, whatever the input carries: the only one craft-fonts has is
+        // `Noto Sans CJK SC`, Source Han Sans rebranded, and shipping it would put a barred asset in
+        // every release (`AGENTS.md` §1.1). The interface draws Simplified Chinese with an installed
+        // face instead. Narrow this when the input gains a Chinese face that §1.1 allows.
+        if scripts.split(',').any(|s| s.trim() == "Hans") {
+            continue;
+        }
         // Arabic interface faces are small, so the web build keeps them too.
         let arabic = scripts.split(',').any(|s| s.trim() == "Arab");
         // Telugu faces too, for the Telugu interface.
