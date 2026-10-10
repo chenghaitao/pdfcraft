@@ -372,8 +372,8 @@ Ctrl-逗号，没有打开文档时也可用；Auto 跟随系统语言；详见
 Čeština 与 Português (Brasil) 目前覆盖菜单。命令搜索同时接受译文、英文原文和稳定的命令 id；
 文件名、PDF 内容、作者名、自定义动作名，以及来自引擎或操作系统的错误详情，保持其原有文字。
 
-CJK 字体来自 [craft-fonts](https://github.com/storytold/craft-fonts)，这是一个可选构建输入，
-每个正式版都会包含。要自行构建（中日韩界面文字，以及写入 PDF 的日文文字）：
+界面字体来自 [craft-fonts](https://github.com/storytold/craft-fonts)，这是一个可选构建输入，
+每个正式版都会包含。要自行构建（日文、简体中文、阿拉伯文界面文字，以及写入 PDF 的日文文字）：
 
 ```sh
 git clone https://github.com/storytold/craft-fonts ../craft-fonts
@@ -384,8 +384,9 @@ CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p pdfcraft -- some.pdf
 （Windows 用微软雅黑、macOS 用苹方、Linux 用 Noto Sans CJK），因此中文或日文标签仍然可读，
 不会再显示成方块；设置 `PDFCRAFT_SYSTEM_FONTS=0` 可关闭这一回退。该输入已覆盖的脚本组不会再由系统字体
 绘制；Windows 上 `packaging\windows\build.ps1` 会自动接管放在仓库根目录旁的 `craft-fonts\`
-（见 `docs/releasing.md`）。若该 checkout 带 `Hans` 字面——上游 `main` 已加入 `Noto Sans CJK SC`，
-而正式版固定的那个提交没有——简体中文也会用这个设计字体绘制。
+（见 `docs/releasing.md`）。简体中文同样用这个设计字体包里的 `Noto Sans CJK SC` 绘制，正式版
+固定的构建输入已包含它。网页版是例外：它只嵌入 BIZ UDPGothic Regular 与体积很小的阿拉伯文
+字面（Cloudflare Pages 单文件上限 25 MiB），所以浏览器里的中文仍显示替换字形。
 
 每个 [GitHub 发布版](https://github.com/storytold/pdfcraft/releases) 都提供 macOS、Windows、
 Linux（AppImage、Flatpak、`.deb`、`.rpm` 和 tarball）、FreeBSD 和网页版的现成构建，见
@@ -527,7 +528,7 @@ PdfCraft 采用 [MIT](LICENSE-MIT) 或 [Apache-2.0](LICENSE-APACHE) 双许可，
 随附的字体、图标、图像和其他资产各自保留其开放许可；每一项都在
 [ATTRIBUTION.md](ATTRIBUTION.md) 中列出作者、来源与许可。正式版构建还会嵌入
 [craft-fonts](https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md)
-的中日韩字体（SIL Open Font License 1.1）。
+的界面字体——日文、简体中文与阿拉伯文（SIL Open Font License 1.1）。
 
 [`docs/brand/`](docs/brand/) 中的 ArtCraft 名称、字标与徽标是 ArtCraft 团队的商标，
 不在本许可覆盖范围内。它们只能原样使用，只能作为本仓库和 PdfCraft 的一部分，依据

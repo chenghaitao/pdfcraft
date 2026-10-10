@@ -387,8 +387,9 @@ already installed on the machine (Microsoft YaHei on Windows, PingFang on macOS,
 Linux), so a Chinese or Japanese label stays readable instead of showing a box; `PDFCRAFT_SYSTEM_FONTS=0`
 turns that fallback off. A group the input does cover is not drawn by an installed face at all, and on
 Windows `packaging\windows\build.ps1` picks up a `craft-fonts\` checkout beside the repository root
-on its own (`docs/releasing.md`). A checkout that carries a `Hans` face — upstream `main` added
-`Noto Sans CJK SC`; the release-pinned one has none — draws Simplified Chinese in the crafted face too.
+on its own (`docs/releasing.md`). Simplified Chinese is drawn in the crafted face too, from the
+`Noto Sans CJK SC` the pinned input carries — except in the web build, which stays Latin and
+Japanese to fit the hosting limit.
 
 Each [GitHub release](https://github.com/storytold/pdfcraft/releases) has ready-made builds for macOS,
 Windows, Linux (AppImage, Flatpak, `.deb`, `.rpm` and a tarball), FreeBSD and the web; see
@@ -531,7 +532,8 @@ Copyright (c) 2026 ArtCraft Team and the PdfCraft contributors. Required notices
 
 Bundled fonts, icons, images and other assets keep their own open licenses; each one is listed
 with its author, source and license in [ATTRIBUTION.md](ATTRIBUTION.md). Release builds also embed
-the Japanese fonts of [craft-fonts](https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md)
+the interface fonts of [craft-fonts](https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md)
+— Japanese, Simplified Chinese and Arabic
 (SIL Open Font License 1.1).
 
 The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are trademarks of the

@@ -65,8 +65,10 @@ date in the AppStream metadata. The binaries don't embed the commit yet.
 
 **Fonts:** every job checks out [craft-fonts](https://github.com/storytold/craft-fonts) at the commit
 pinned in `release.yml` and builds with `CRAFT_FONTS_DIR` and `CRAFT_FONTS_REQUIRED=1`, so releases
-embed its Japanese fonts and fail rather than ship without them (`AGENTS.md` §1.4). Bump the pin
-deliberately.
+embed its interface fonts — Japanese, Simplified Chinese and Arabic — and fail rather than ship
+without them (`AGENTS.md` §1.4). Bump the pin deliberately. The wasm32 build keeps only the faces
+`crates/fonts/build.rs` allows there (BIZ UDPGothic Regular, plus any `Arab` or `Telu` face), so a
+face added for the desktop builds leaves the browser bundle alone.
 
 ### macOS
 
