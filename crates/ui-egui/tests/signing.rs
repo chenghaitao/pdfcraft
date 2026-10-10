@@ -145,6 +145,17 @@ fn drawing_a_signature_creating_an_id_signing_and_trusting() {
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert_eq!(h.state().dialog, None);
+    // Signature Properties: the validity summary dialog the panel opens.
+    h.get_by_label("Signature Properties…").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::SignatureProperties));
+    h.get_by_label("Validity Summary");
+    // The panel behind the dialog states the verdict too.
+    assert!(h.get_all_by_label("Signature is valid:").count() >= 2, "the dialog repeats the panel's verdict");
+    assert!(h.get_all_by_label_contains("Grace Hopper").count() >= 2, "the panel and the dialog both name the signer");
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
     // View signed version opens the bytes the signature covers as a new document.
     h.get_by_label("View signed version").click();
     h.run_steps(3);
@@ -192,6 +203,26 @@ fn certifying_without_a_visible_signature() {
     let sig = doc.signatures.iter().find(|x| x.signed).unwrap();
     assert_eq!((sig.certify, sig.visible), (Some(2), false));
     h.get_by_label_contains("Certified by Test Signer EC");
+    // Signature Properties: a certification signature says what later changes it permits, and
+    // the signed version opens from the dialog too.
+    h.state_mut().right = Some(RightPanel::Signatures);
+    h.run_steps(2);
+    h.get_by_label_contains("Certified by Test Signer EC").click();
+    h.run_steps(2);
+    h.get_by_label("Signature Properties…").click();
+    h.run_steps(3);
+    h.get_by_label("Validity Summary");
+    h.get_by_label("Form fill-in and digital signatures");
+    // Close the panel: the dialog's own buttons are the only ones left, as when it is opened
+    // from a page's signature with no panel in the way.
+    h.state_mut().right = None;
+    h.run_steps(2);
+    h.get_by_label("View signed version").click();
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!(s.dialog, None);
+    assert_eq!(s.views.len(), 2);
+    assert!(s.session.get(s.views[1].id).unwrap().name.contains("signed version"));
 }
 
 /// The fixture with an empty signature field across the bottom of the page.

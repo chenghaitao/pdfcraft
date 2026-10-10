@@ -707,6 +707,32 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 }
                 return;
             }
+            Dialog::SignatureProperties => {
+                ui.set_width(560.0);
+                let Some(s) = app.sig_props.clone() else {
+                    close = true;
+                    return;
+                };
+                let (done, action) = crate::sign_ui::properties(ui, &s, &t);
+                close = done;
+                match action {
+                    Some(crate::sign_ui::PropsAction::ViewCertificate(chain)) => {
+                        app.cert_viewer = Some(crate::sign_ui::CertViewer { chain, selected: 0, tab: crate::sign_ui::CertTab::Summary });
+                        close = false;
+                        next = Dialog::CertificateViewer;
+                    }
+                    Some(crate::sign_ui::PropsAction::ExportCertificate(c)) => {
+                        let pem = crate::sign_ui::certificate_pem(&c);
+                        app.write_files(&[(format!("{}.cer", c.display_name()), std::sync::Arc::new(pem.into_bytes()))], "Export certificate");
+                    }
+                    Some(crate::sign_ui::PropsAction::ViewSigned(len)) => {
+                        app.view_signed_version(len);
+                        close = true;
+                    }
+                    None => {}
+                }
+                return;
+            }
             Dialog::AuditSpace => {
                 if crate::optimize_ui::audit_body(ui, &app.space_audit, &t) {
                     next = Dialog::Optimize;

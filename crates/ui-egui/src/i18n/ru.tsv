@@ -846,6 +846,9 @@
 	Signature validity is UNKNOWN:	Действительность подписи НЕИЗВЕСТНА:
 	Signature is INVALID:	Подпись НЕДЕЙСТВИТЕЛЬНА:
 	Signature Details	Сведения о подписи
+	Signature Properties	Свойства подписи
+	Signature Properties…	Свойства подписи…
+	Validity Summary	Сводка о действительности
 	Reason	Причина
 	Signing time	Время подписания
 	Algorithm	Алгоритм

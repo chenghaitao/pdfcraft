@@ -275,6 +275,8 @@ pub enum Dialog {
     AuditSpace,
     /// Signatures ▸ Show certificate.
     CertificateViewer,
+    /// Signatures panel ▸ Signature Properties: one signature's validity summary and details.
+    SignatureProperties,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -445,6 +447,8 @@ pub struct PdfCraftApp {
     /// List the OS key store's signing identities among the digital IDs (the desktop app).
     pub os_key_store_ids: bool,
     pub cert_viewer: Option<sign_ui::CertViewer>,
+    /// The signature whose Signature Properties dialog is open (a copy: the panel may close).
+    pub sig_props: Option<Box<pdfcraft_engine::SignatureInfo>>,
     /// The last space audit.
     pub space_audit: Vec<pdfcraft_engine::optimize::SpaceUse>,
     /// Combine files: the files staged so far.
@@ -659,6 +663,7 @@ impl PdfCraftApp {
             alt_draft: Default::default(),
             os_key_store_ids: false,
             cert_viewer: None,
+            sig_props: None,
             space_audit: Vec::new(),
             combine_draft: Vec::new(),
             combine_tab: Default::default(),

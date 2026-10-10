@@ -823,6 +823,8 @@ pub enum PanelAction {
     ExportCertificate(Box<Certificate>),
     /// Certificate Viewer for the signer's chain (signer first).
     ViewCertificate(Vec<Certificate>),
+    /// Signature Properties for this signature (a copy, so the dialog survives the panel closing).
+    Properties(Box<SignatureInfo>),
 }
 
 /// The Signatures panel body.
@@ -940,6 +942,9 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expan
             }
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
+                if ui.button(tl!("Signature Properties…")).clicked() {
+                    action = Some(PanelAction::Properties(Box::new((*s).clone())));
+                }
                 if let Some(c) = s.chain.last().or(s.certificate.as_ref())
                     && s.status == SignatureStatus::Unknown
                     && ui.button(tl!("Add to trusted certificates")).clicked()
@@ -965,6 +970,106 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, sigs: &[SignatureInfo], expan
         });
     }
     action
+}
+
+/// What the Signature Properties dialog asks the app to do with its signature.
+pub(crate) enum PropsAction {
+    /// Certificate Viewer for the signer's chain (signer first).
+    ViewCertificate(Vec<Certificate>),
+    ExportCertificate(Box<Certificate>),
+    /// Open the bytes this signature covers as a new document.
+    ViewSigned(usize),
+}
+
+/// The Signature Properties dialog (Signatures panel ▸ Signature Properties…): the validity
+/// summary Acrobat leads with, the details behind it, and the signature's own actions.
+pub(crate) fn properties(ui: &mut egui::Ui, s: &SignatureInfo, t: &Tokens) -> (bool, Option<PropsAction>) {
+    title(ui, "Signature Properties");
+    let mut action = None;
+    if s.signed {
+        ui.label(egui::RichText::new(tl!("Validity Summary")).font(theme::semibold(12.0)));
+        let (icon, color) = status_icon(s);
+        ui.horizontal(|ui| {
+            ui.add(icons::image(icon, 16.0, color));
+            ui.label(
+                egui::RichText::new(match s.status {
+                    SignatureStatus::Valid => tl!("Signature is valid:"),
+                    SignatureStatus::Unknown => tl!("Signature validity is UNKNOWN:"),
+                    SignatureStatus::Invalid => tl!("Signature is INVALID:"),
+                })
+                .font(theme::semibold(13.0)),
+            );
+        });
+        for line in &s.details {
+            ui.add(egui::Label::new(egui::RichText::new(format!("• {line}")).font(theme::regular(11.5)).color(t.text_muted)).wrap());
+        }
+        ui.add_space(8.0);
+    }
+    ui.label(egui::RichText::new(tl!("Signature Details")).font(theme::semibold(12.0)));
+    let mut rows: Vec<(&str, String)> = Vec::new();
+    if let Some(c) = &s.certificate {
+        rows.push(("Signer", c.subject.display()));
+        rows.push(("Issued by", c.issuer.display()));
+        rows.push(("Valid", format!("{} to {}", c.not_before, c.not_after)));
+    }
+    if let Some(d) = &s.date {
+        rows.push(("Signing time", sign::pdf::display_date(d)));
+    }
+    // Only a time that was actually verified is a timestamp: an untrusted token's time is not
+    // one, and the summary above already says what its token did.
+    if let Some(stamp) = s.timestamp_time.as_ref() {
+        rows.push(("Timestamp", stamp.to_string()));
+    }
+    if let Some(r) = &s.reason {
+        rows.push(("Reason", r.clone()));
+    }
+    if let Some(l) = &s.location {
+        rows.push(("Location", l.clone()));
+    }
+    if let Some(a) = &s.algorithm {
+        rows.push(("Algorithm", a.clone()));
+    }
+    if let Some(p) = s.certify {
+        rows.push((
+            "Permitted actions after certifying",
+            match p {
+                1 => tl!("No changes allowed").to_string(),
+                3 => tl!("Annotations, form fill-in, and digital signatures").to_string(),
+                _ => tl!("Form fill-in and digital signatures").to_string(),
+            },
+        ));
+    }
+    rows.push(("Field", s.field.clone()));
+    if let Some(p) = s.page {
+        rows.push(("Page", (p + 1).to_string()));
+    }
+    egui::Grid::new("sig-props-rows").num_columns(2).spacing([12.0, 5.0]).show(ui, |ui| {
+        for (k, v) in &rows {
+            ui.label(egui::RichText::new(tl!(*k)).color(t.text_muted));
+            ui.add(egui::Label::new(v.as_str()).wrap());
+            ui.end_row();
+        }
+    });
+    ui.add_space(8.0);
+    ui.horizontal_wrapped(|ui| {
+        if let Some(c) = &s.certificate {
+            if ui.button(tl!("Show certificate…")).clicked() {
+                let mut chain = vec![c.clone()];
+                chain.extend(s.chain.iter().filter(|x| x.raw != c.raw).cloned());
+                action = Some(PropsAction::ViewCertificate(chain));
+            }
+            if ui.button(tl!("Export certificate…")).clicked() {
+                action = Some(PropsAction::ExportCertificate(Box::new(c.clone())));
+            }
+        }
+        if s.signed && ui.button(tl!("View signed version")).clicked() {
+            action = Some(PropsAction::ViewSigned(s.signed_len));
+        }
+    });
+    ui.add_space(10.0);
+    let mut close = false;
+    ui.horizontal(|ui| ui.with_layout(Layout::right_to_left(Align::Center), |ui| close = widgets::pill_button(ui, tl!("OK"), true).clicked()));
+    (close, action)
 }
 
 /// Certificate Viewer: a chain (the end certificate first) and the tab shown.
